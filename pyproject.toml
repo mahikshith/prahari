@@ -1,0 +1,42 @@
+[project]
+name = "prahari"
+version = "0.0.1"
+description = "AI spend control plane — cross-provider cost visibility with sub-hour credential-abuse detection"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.28",
+    "dlt[duckdb]>=1.4",
+    "duckdb>=1.1",
+    "pandas>=2.2",
+    "statsmodels>=0.14",
+    "python-dateutil>=2.9",
+    "rich>=13.9",
+]
+
+[project.optional-dependencies]
+api = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]
+app = ["streamlit>=1.40", "altair>=5.4"]
+gcp = ["google-cloud-bigquery>=3.27", "google-cloud-monitoring>=2.23"]
+aws = ["boto3>=1.35"]
+azure = ["azure-identity>=1.19", "azure-mgmt-costmanagement>=4.0"]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "respx>=0.21", "ruff>=0.8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prahari"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

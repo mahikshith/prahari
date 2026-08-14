@@ -1,4 +1,4 @@
-"""Detection engine — the moat.
+"""Detection engine - the moat.
 
 Five named rules matching the LLMjacking fingerprint. Deliberately statistical and
 rule-based rather than learned: a CFO must be able to read why an alert fired, and
@@ -20,15 +20,16 @@ from decimal import Decimal
 from enum import StrEnum
 
 # --- tunables -----------------------------------------------------------------
-# Defaults are starting points, to be calibrated against the ₹6cr backtest and real
+# Defaults are starting points, to be calibrated against the backtest and real
 # design-partner data. Each is a false-positive/miss tradeoff we must own explicitly.
+# See ASSUMPTIONS.md A7.
 
 SPEND_SPIKE_MULTIPLE = Decimal("3.2")
 """1h spend vs the deseasonalised 7-day hourly mean. 3.2x is the widely-cited
 starting threshold; calibrate before trusting it."""
 
 SPEND_SPIKE_MIN_ABSOLUTE = Decimal("50")
-"""Floor in USD. Without this, a key that normally spends $0.10/hr alerts at $0.35 —
+"""Floor in USD. Without this, a key that normally spends $0.10/hr alerts at $0.35 -
 technically a 3.5x spike, operationally noise."""
 
 DORMANCY_DAYS = 30
@@ -40,6 +41,10 @@ than a confident wrong one."""
 BUSINESS_HOURS_IST = range(9, 21)
 RESALE_CONTEXT_UTILISATION = 0.85
 RESALE_MIN_HOURS = 3
+
+DetectionKey = tuple[str, str]
+"""(provider, credential). Deliberately excludes model and region - see
+UsageRecord.detection_key for why partitioning by model would be an evasion hole."""
 
 
 class Rule(StrEnum):
@@ -58,9 +63,9 @@ class Severity(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Observation:
-    """One hour of activity for one detection key."""
+    """One hour of activity for one credential."""
 
-    detection_key: tuple[str, str, str, str]
+    detection_key: DetectionKey
     hour: datetime
     spend: Decimal
     tokens: int
@@ -78,11 +83,11 @@ class Observation:
 
 @dataclass(slots=True)
 class Baseline:
-    """Rolling per-key history. Deseasonalised because engineering usage has a hard
-    weekday pattern — a naive threshold alerts every Monday morning, and a detector
-    that cries wolf weekly gets muted, which is the same as not existing."""
+    """Rolling per-credential history. Deseasonalised because engineering usage has a
+    hard weekday pattern - a naive threshold alerts every Monday morning, and a
+    detector that cries wolf weekly gets muted, which is the same as not existing."""
 
-    detection_key: tuple[str, str, str, str]
+    detection_key: DetectionKey
     hourly_spend: list[Decimal] = field(default_factory=list)
     hour_of_week_spend: dict[int, list[Decimal]] = field(default_factory=dict)
     last_seen: datetime | None = None
@@ -98,7 +103,14 @@ class Baseline:
         how = _hour_of_week(obs.hour)
         self.hour_of_week_spend.setdefault(how, []).append(obs.spend)
 
-        self.last_seen = obs.hour
+        # `last_seen` tracks ACTIVITY, not observations. Zero-spend hours are fed in
+        # to keep the spend baseline honest (a credential idle at 3am should not have
+        # its norm computed from busy hours only), but they must not count as use -
+        # otherwise gap-filled quiet hours would keep `last_seen` fresh forever and
+        # DORMANT_KEY_WAKE could never fire.
+        if obs.spend > 0:
+            self.last_seen = obs.hour
+
         if obs.country:
             self.known_countries.add(obs.country)
         if obs.asn:
@@ -142,7 +154,7 @@ class Alert:
 
     rule: Rule
     severity: Severity
-    detection_key: tuple[str, str, str, str]
+    detection_key: DetectionKey
     at: datetime
     observed: Decimal
     baseline: Decimal
@@ -153,16 +165,20 @@ class Alert:
     evidence: dict[str, object]
     confidence: str = "high"
 
+    @property
+    def credential(self) -> str:
+        return self.detection_key[1]
+
     def explain(self) -> str:
-        _, key_id, model, region = self.detection_key
-        return (
-            f"[{self.rule}] key={key_id} model={model} region={region} — "
-            f"observed {self.observed} {self.currency}/hr vs baseline "
-            f"{self.baseline} {self.currency}/hr"
-            + (f" ({self.multiple}x)" if self.multiple is not None else "")
-            + f". Spent so far: {self.spend_so_far} {self.currency}. "
-            f"Projected 24h exposure: {self.projected_24h} {self.currency}."
-        )
+        parts = [
+            f"[{self.rule}] key={self.credential}",
+            f"observed {self.observed} {self.currency}/hr",
+            f"baseline {self.baseline} {self.currency}/hr"
+            + (f" ({self.multiple}x)" if self.multiple is not None else ""),
+            f"spent so far {self.spend_so_far} {self.currency}",
+            f"projected 24h exposure {self.projected_24h} {self.currency}",
+        ]
+        return " | ".join(parts)
 
 
 def _hour_of_week(dt: datetime) -> int:
@@ -177,7 +193,7 @@ def _project_24h(hourly: Decimal) -> Decimal:
 
 
 def spend_spike(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | None:
-    """Hourly spend far above the seasonally-adjusted norm for this key.
+    """Hourly spend far above the seasonally-adjusted norm for this credential.
 
     The workhorse rule: it catches both LLMjacking and runaway agent loops, which
     look nearly identical from the billing side.
@@ -201,7 +217,12 @@ def spend_spike(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert 
             spend_so_far=spend_so_far,
             projected_24h=_project_24h(obs.spend),
             currency="USD",
-            evidence={"reason": "no prior spend on this key", "samples": bl.sample_count},
+            evidence={
+                "reason": "no prior spend on this credential",
+                "samples": bl.sample_count,
+                "model": obs.model,
+                "region": obs.region,
+            },
         )
 
     multiple = (obs.spend / expected).quantize(Decimal("0.01"))
@@ -225,15 +246,18 @@ def spend_spike(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert 
             "samples": bl.sample_count,
             "seasonally_adjusted": len(bl.hour_of_week_spend.get(_hour_of_week(obs.hour), []))
             >= 3,
+            "model": obs.model,
+            "region": obs.region,
         },
     )
 
 
 def dormant_key_wake(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | None:
-    """A key idle for weeks suddenly transacting.
+    """A credential idle for weeks suddenly transacting.
 
     High signal, low noise: this is the classic shape of a credential harvested some
-    time ago and only now monetised — exactly the ₹6 crore pattern.
+    time ago and only now monetised - exactly the incident pattern. It only works
+    because the baseline is per-credential; a key in daily use can never go dormant.
     """
     if bl.last_seen is None or obs.spend <= 0:
         return None
@@ -253,16 +277,20 @@ def dormant_key_wake(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> A
         spend_so_far=spend_so_far,
         projected_24h=_project_24h(obs.spend),
         currency="USD",
-        evidence={"idle_days": idle.days, "last_seen": bl.last_seen.isoformat()},
+        evidence={
+            "idle_days": idle.days,
+            "last_seen": bl.last_seen.isoformat(),
+            "model": obs.model,
+        },
     )
 
 
 def new_geo(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | None:
-    """Known key, never-before-seen country or network.
+    """Known credential, never-before-seen country or network.
 
     Requires the provider or cloud audit log to expose caller origin. Where it is
-    unavailable the rule stays silent rather than guessing — a detector that
-    fabricates evidence is worse than one that abstains.
+    unavailable the rule stays silent rather than guessing - a detector that
+    fabricates evidence is worse than one that abstains. See ASSUMPTIONS.md A5.
     """
     if not bl.is_established:
         return None
@@ -294,10 +322,13 @@ def new_geo(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | No
 def model_escalation(
     obs: Observation, bl: Baseline, spend_so_far: Decimal, premium_models: set[str]
 ) -> Alert | None:
-    """Abrupt switch to the most expensive model available to the key.
+    """Abrupt switch to a premium model on a credential that never used one.
 
-    Attackers reselling access optimise for output quality, not cost — they did not
+    Attackers reselling access optimise for output quality, not cost - they did not
     pay for it. Legitimate teams migrate models gradually and deliberately.
+
+    Only detectable because the baseline is per-credential rather than per-(key,model):
+    partitioning by model would give the switch a fresh empty baseline instead.
     """
     if not bl.is_established or not obs.model:
         return None
@@ -319,9 +350,7 @@ def model_escalation(
     )
 
 
-def resale_pattern(
-    window: list[Observation], bl: Baseline, spend_so_far: Decimal
-) -> Alert | None:
+def resale_pattern(window: list[Observation], bl: Baseline, spend_so_far: Decimal) -> Alert | None:
     """Sustained near-maximum context outside business hours.
 
     The signature of a reverse-proxy resale operation: continuous, uniform, maxed-out
@@ -376,9 +405,9 @@ class Detector:
     baseline that spikes are normal and the second hour of an attack looks fine."""
 
     def __init__(self, premium_models: set[str] | None = None) -> None:
-        self._baselines: dict[tuple[str, str, str, str], Baseline] = {}
-        self._windows: dict[tuple[str, str, str, str], list[Observation]] = {}
-        self._cumulative: dict[tuple[str, str, str, str], Decimal] = {}
+        self._baselines: dict[DetectionKey, Baseline] = {}
+        self._windows: dict[DetectionKey, list[Observation]] = {}
+        self._cumulative: dict[DetectionKey, Decimal] = {}
         self._premium_models = premium_models or set()
 
     def process(self, obs: Observation) -> list[Alert]:
@@ -409,5 +438,8 @@ class Detector:
 
         return alerts
 
-    def baseline_for(self, key: tuple[str, str, str, str]) -> Baseline | None:
+    def baseline_for(self, key: DetectionKey) -> Baseline | None:
         return self._baselines.get(key)
+
+    def cumulative_spend(self, key: DetectionKey) -> Decimal:
+        return self._cumulative.get(key, Decimal(0))

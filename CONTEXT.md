@@ -18,6 +18,20 @@ Full memo: [docs/MARKET_RESEARCH.md](docs/MARKET_RESEARCH.md). The three finding
 
 The incident is not bad luck — it's a named category, **LLMjacking**. Sysdig documented $46K/day on a hijacked Claude 2.x account and >$100K/day on Opus, and a **376% rise** in AI-targeted credential theft between Q4 2025 and Q1 2026.
 
+## Product scope: North Star vs wedge
+
+**North Star — a unified cost platform.** Not only LLM/AI spend: BigQuery, Cloud Run, GKE, storage, egress, the whole bill. One platform, every provider, every cost line, allocated to teams.
+
+**Wedge — AI/LLM cross-provider, first.** Everything shipped now targets AI spend across Anthropic, OpenAI, Vertex, Bedrock, Azure OpenAI and the seat-based tools.
+
+**Why this direction and not the reverse.** Every incumbent came from cloud and is bolting AI on — CloudZero, Vantage, Finout, Flexera, Amnic. Entering from AI and expanding into cloud is the opposite path, and it's the better one:
+
+1. AI is where the pain is acute and unsolved *right now* — the #1 requested FinOps capability, arriving before the tooling.
+2. **The security differentiator only exists on the AI side.** Nobody is hijacking a Cloud Run service to resell it; they hijack inference credentials because there's a black market for tokens. Our moat cannot be built from the cloud side.
+3. Once we hold a customer's AI cost data and their trust, cloud is an **expansion sale** into an account we already own. Going the other way means displacing an entrenched FinOps vendor on their home ground — a fight we'd lose.
+
+**Architecturally this costs us nothing today.** FOCUS 1.3 already normalises all cloud services, not just AI, and `UsageRecord` is modelled against it. When cloud comes, it's new connectors against an existing schema — not a re-model. The discipline to hold is scope, not design: see `ASSUMPTIONS.md` A9.
+
 ## Decisions made
 
 | Decision | Rationale |

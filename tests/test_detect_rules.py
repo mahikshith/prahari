@@ -23,7 +23,7 @@ from prahari.detect.rules import (
     Severity,
 )
 
-KEY = ("gcp_vertex", "sa-robotics-prod@example.iam", "gemini-1.5-pro", "asia-south1")
+KEY = ("gcp_vertex", "sa-robotics-prod@example.iam")
 START = datetime(2026, 6, 1, tzinfo=UTC)
 
 
@@ -151,6 +151,57 @@ class TestModelEscalation:
         assert not [a for a in alerts if a.rule is Rule.MODEL_ESCALATION]
 
 
+class TestDetectionKeyIsPerCredential:
+    """Regression guard for a real bug: the key originally included model and region,
+    which handed an attacker a fresh empty baseline the moment they switched models."""
+
+    def test_model_switch_keeps_the_same_baseline(self):
+        det = Detector(premium_models={"claude-opus-4"})
+        h = warm_up(det)
+
+        alerts = det.process(obs(h, "700", model="claude-opus-4"))
+
+        # A new-model observation must still be judged against the credential's
+        # existing baseline, not a fresh one.
+        assert [a for a in alerts if a.rule is Rule.SPEND_SPIKE]
+        assert [a for a in alerts if a.rule is Rule.MODEL_ESCALATION]
+
+    def test_region_switch_keeps_the_same_baseline(self):
+        det = Detector()
+        h = warm_up(det)
+        alerts = det.process(obs(h, "700", region="europe-west4"))
+        assert [a for a in alerts if a.rule is Rule.SPEND_SPIKE]
+
+
+class TestBaselineTracksActivityNotObservations:
+    """Zero-spend hours keep the spend baseline honest but must not refresh
+    `last_seen` — otherwise gap-filled quiet hours mask dormancy forever."""
+
+    def test_zero_hours_do_not_reset_dormancy(self):
+        det = Detector()
+        h = warm_up(det)
+
+        # 40 days of gap-filled silence.
+        for gap in range(24 * 40):
+            det.process(obs(h + gap, "0"))
+
+        alerts = det.process(obs(h + 24 * 40, "900"))
+        assert [a for a in alerts if a.rule is Rule.DORMANT_KEY_WAKE]
+
+    def test_zero_hours_still_enter_the_spend_baseline(self):
+        det = Detector()
+        for h in range(24):
+            det.process(obs(h, "100"))
+        for h in range(24, 48):
+            det.process(obs(h, "0"))
+
+        bl = det.baseline_for(KEY)
+        assert bl is not None
+        assert bl.sample_count == 48
+        # Mean must reflect the quiet hours, not just the busy ones.
+        assert bl.expected_spend(START + timedelta(hours=48)) < Decimal("100")
+
+
 class TestAlertExplainability:
     def test_explain_names_rule_baseline_and_exposure(self):
         """F5.3 — a CFO must be able to read why it fired, from the alert alone."""
@@ -161,7 +212,8 @@ class TestAlertExplainability:
         text = alert.explain()
         assert "SPEND_SPIKE" in text
         assert "baseline" in text
-        assert "Projected 24h exposure" in text
+        assert "projected 24h exposure" in text
+        assert alert.credential == KEY[1]
 
     def test_evidence_records_sample_count(self):
         det = Detector()

@@ -207,12 +207,16 @@ class UsageRecord(BaseModel):
         return self.completeness is Completeness.ESTIMATED
 
     @property
-    def detection_key(self) -> tuple[str, str, str, str]:
-        """Baseline grouping key for `detect`. Falls back to account when the provider
-        does not expose a key id — coarser, but never silently absent."""
-        return (
-            self.provider.value,
-            self.api_key_id or self.user_id or self.account_id,
-            self.model or "unknown",
-            self.region or "unknown",
-        )
+    def detection_key(self) -> tuple[str, str]:
+        """Baseline grouping key for `detect`: **(provider, credential)**.
+
+        Deliberately excludes model and region. A spend baseline belongs to the
+        *credential*, not the credential-model pair — partitioning by model would hand
+        an attacker a fresh, empty baseline the moment they switched models, which is
+        precisely the escalation we exist to catch. Model and region are observation
+        attributes consumed by MODEL_ESCALATION and NEW_GEO instead.
+
+        Falls back to user then account when the provider exposes no key id — coarser,
+        but never silently absent.
+        """
+        return (self.provider.value, self.api_key_id or self.user_id or self.account_id)

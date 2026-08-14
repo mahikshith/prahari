@@ -14,6 +14,12 @@ Mahikshith's company lost **~₹6 crore (~$700K)** when a GCP service account ke
 
 Full market research: [docs/MARKET_RESEARCH.md](docs/MARKET_RESEARCH.md). Read it before proposing strategy changes.
 
+## Scope: North Star vs wedge
+
+**North Star:** a unified cost platform — all cloud spend (BigQuery, Cloud Run, GKE, storage, egress) *and* AI, one pane, allocated to teams.
+
+**Wedge, and what we build now:** AI/LLM cross-provider only. Cloud connectors come after the AI wedge lands. `UsageRecord` is FOCUS 1.3-aligned, which already covers all cloud services — so this costs no rework later. The discipline to hold is scope, not design. Reasoning in [CONTEXT.md](CONTEXT.md).
+
 ## The wedge (do not drift from this)
 
 | Layer | Purpose | Status |
@@ -71,6 +77,16 @@ data/           gitignored. raw/ = provider pulls, warehouse/ = DuckDB files
 
 Reason from the user backwards. Decide firmly and state the decision — don't present option menus without a recommendation. Keep [CONTEXT.md](CONTEXT.md) and [PROGRESS.md](PROGRESS.md) current; they are how a session picks up cold.
 
-## Current state
+## Autonomous mode
 
-See [PROGRESS.md](PROGRESS.md). At time of writing: repo scaffolded, no connectors yet. The first deliverable is the **₹6 crore backtest** (`scripts/`) — a sales artifact, not product code.
+Work proceeds without waiting on answers. The contract:
+
+1. **Every assumption goes in [ASSUMPTIONS.md](ASSUMPTIONS.md)** — what was assumed, why, blast radius if wrong, how to verify. Assumptions are never decisions; decisions go to `CONTEXT.md` and `CHANGELOG.md`.
+2. **[PROGRESS.md](PROGRESS.md) is the session handoff.** Update it before ending any work block. A cold session — or one resuming after a rate limit — must be able to read `CLAUDE.md` → `PROGRESS.md` → `ASSUMPTIONS.md` and continue without re-deriving anything.
+3. **Commit at every checkpoint**, not at the end. Unpushed work lost to an interruption is the failure mode to design against.
+4. **Synthetic data is labelled synthetic, always.** Never let a modelled number reach a prospect as if it were measured — one such slip destroys the credibility the artifact exists to build.
+5. **Blocked work doesn't stall the queue.** Do everything that doesn't depend on the answer, record the assumption, move on.
+
+## Reading order for a cold session
+
+[CLAUDE.md](CLAUDE.md) (this file) → [PROGRESS.md](PROGRESS.md) (state + next actions) → [ASSUMPTIONS.md](ASSUMPTIONS.md) (what's unverified) → [CONTEXT.md](CONTEXT.md) (why) → `docs/` as needed.

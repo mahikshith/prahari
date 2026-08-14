@@ -14,17 +14,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from backtest_incident import run  # noqa: E402
+from backtest_incident import run
 
-from prahari.core.models import (  # noqa: E402
+from prahari.core.models import (
     CostComponents,
     Provider,
     TokenCounts,
     UsageRecord,
 )
-from prahari.detect.aggregate import observations_from_records  # noqa: E402
-from prahari.detect.rules import Rule  # noqa: E402
-from prahari.synth.incident import (  # noqa: E402
+from prahari.detect.aggregate import observations_from_records
+from prahari.detect.rules import Rule
+from prahari.synth.incident import (
     Scenario,
     attack_window,
     format_inr_crore,

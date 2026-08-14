@@ -227,7 +227,7 @@ class TestObservationValidation:
         with pytest.raises(ValueError, match="timezone-aware"):
             Observation(
                 detection_key=KEY,
-                hour=datetime(2026, 6, 1),  # noqa: DTZ001 — deliberate
+                hour=datetime(2026, 6, 1),
                 spend=Decimal("1"),
                 tokens=0,
                 requests=0,

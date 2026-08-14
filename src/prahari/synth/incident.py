@@ -79,8 +79,8 @@ class Scenario:
     legit_account: str = "sa-robotics-prod@example.iam.gserviceaccount.com"
     stale_account: str = "sa-batch-legacy@example.iam.gserviceaccount.com"
 
-    legit_model: str = "gemini-1.5-flash"
-    attack_model: str = "gemini-1.5-pro"
+    legit_model: str = "gemini-2.5-flash"
+    attack_model: str = "gemini-2.5-pro"
     """Escalation to a premium model: attackers reselling access optimise for output
     quality, not cost. They did not pay for it."""
 

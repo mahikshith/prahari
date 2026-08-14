@@ -26,10 +26,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from prahari.core.models import UsageRecord  # noqa: E402
-from prahari.detect.aggregate import observations_from_records  # noqa: E402
-from prahari.detect.rules import Alert, Detector, Severity  # noqa: E402
-from prahari.synth.incident import (  # noqa: E402
+from prahari.core.models import UsageRecord
+from prahari.detect.aggregate import observations_from_records
+from prahari.detect.rules import Alert, Detector, Severity
+from prahari.synth.incident import (
     Scenario,
     attack_window,
     format_inr_crore,

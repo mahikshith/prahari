@@ -40,3 +40,9 @@ select = ["E", "F", "I", "N", "UP", "B", "SIM", "RUF"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+    "respx>=0.23.1",
+]

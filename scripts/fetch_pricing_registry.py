@@ -30,8 +30,9 @@ from pathlib import Path
 
 import httpx
 
-# Pinned deliberately. Never point this at a branch name.
-PINNED_SHA = "main"  # TODO: replace with a real commit SHA on first fetch, then never a branch
+# Pinned deliberately. Never point this at a branch name - a branch means whatever
+# upstream pushes lands in our cost calculations unreviewed.
+PINNED_SHA = "4ea5749642de69e86e9414b1557eb8d00660c63c"  # 2026-08-14, 2409 priced models
 
 RAW_URL = (
     "https://raw.githubusercontent.com/BerriAI/litellm/{sha}/"

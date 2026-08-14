@@ -145,17 +145,21 @@ def _build(name: str, entry: dict) -> ModelPrice | None:
     )
 
 
-def premium_models(provider: str | None = None, top_n: int = 15) -> set[str]:
-    """The most expensive models by output rate — input to the MODEL_ESCALATION rule.
+def premium_models(provider: str, top_n: int = 15) -> set[str]:
+    """The most expensive models by output rate for one provider - input to the
+    MODEL_ESCALATION rule. Attackers reselling stolen access optimise for output
+    quality, not cost; they did not pay for it.
 
-    Attackers reselling stolen access optimise for output quality, not cost.
+    `provider` is required deliberately. The registry contains re-hosted variants
+    (wandb/, watsonx/, deepinfra/) whose per-token rates dwarf the frontier models,
+    so an unfiltered "most expensive" list is dominated by models nobody in the
+    customer's org has ever called - which would make the rule fire on nothing.
     """
     data = _load_raw()
     priced = [
         (name, _dec(e.get("output_cost_per_token")))
         for name, e in data.items()
-        if e.get("output_cost_per_token")
-        and (provider is None or e.get("litellm_provider") == provider)
+        if e.get("output_cost_per_token") and e.get("litellm_provider") == provider
     ]
     priced.sort(key=lambda p: p[1] or Decimal(0), reverse=True)
     return {name for name, _ in priced[:top_n]}

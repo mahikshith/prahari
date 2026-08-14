@@ -6,6 +6,24 @@ Architectural and licence decisions are recorded here as well as code changes �
 
 ## [Unreleased]
 
+### Added — autonomous session, 2026-08-15
+- Incident backtest (`scripts/backtest_incident.py`) producing the Stage 0 artifact: detection at ₹72,359, ten days and ₹5.84 crore before the invoice. Runs on synthetic data calibrated to published LLMjacking rates.
+- Synthetic incident generator (`src/prahari/synth/incident.py`) — two credentials: a legitimate control and a stale decommissioned key that leaks.
+- `UsageRecord` → `Observation` aggregation with gap filling (`detect/aggregate.py`).
+- Anthropic and OpenAI connectors, with mocked tests against the documented API shapes.
+- LiteLLM price registry vendored at pinned SHA `4ea5749` (2,427 models), sha256-verified on load.
+- `ASSUMPTIONS.md` — the autonomous-mode contract: every assumption logged with blast radius and how to verify.
+- GTM artifacts: case study, 30-call discovery script, gate tracker.
+
+### Fixed — two real bugs, found while wiring the backtest
+- **`detection_key` included model and region.** An attacker switching models received a fresh, empty baseline — precisely the evasion `MODEL_ESCALATION` exists to catch. Baselines are now per-credential.
+- **Gap-filled zero hours refreshed `Baseline.last_seen`**, so `DORMANT_KEY_WAKE` could never fire. `last_seen` now tracks activity rather than observations; zero hours still feed the spend baseline so the norm stays honest.
+
+### Changed
+- **Unified platform recorded as the North Star** — all cloud cost (BigQuery, Cloud Run, GKE, storage), not only AI. AI cross-provider remains the wedge. Entering from AI and expanding into cloud is the opposite of every incumbent's path and the better one: the security moat only exists on the AI side, and cloud then becomes an expansion sale rather than a displacement fight.
+- `premium_models()` now requires a provider — unfiltered, re-hosted variants (`wandb/`, `watsonx/`) dwarf the frontier models and `MODEL_ESCALATION` would fire on nothing.
+- Synthetic scenario moved to `gemini-2.5-*`; `gemini-1.5-*` has been deprecated out of the upstream registry.
+
 ### Added
 - Market research memo covering market size, the four competitor layers, unclaimed gaps, investor appetite and India-domestic reality (`docs/MARKET_RESEARCH.md`)
 - Open-source inventory with licence audit — what we reuse vs build (`docs/OSS_INVENTORY.md`)

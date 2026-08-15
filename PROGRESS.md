@@ -66,6 +66,16 @@ more code.
 - [x] Synthetic fleet + `scripts/report.py`
 - [x] **Bug found & fixed:** budget periods must close on **IST** boundaries. The fleet spanned a UTC month, so 5.5 hours spilled over, `as_of` landed in the next month, and every budget evaluated against a nearly empty period while still printing a confident number.
 
+### The collector runs (roadmap A3, B1–B4)
+- [x] **DuckDB store** — idempotent upserts, watermarks that never rewind, alert dedup, budget-threshold state
+- [x] **Collector daemon** — watermark-driven incremental fetch, settling lag, concurrent collection with per-provider failure isolation, backoff with jitter, graceful shutdown
+- [x] **Alert delivery** — console / Slack / SMTP, severity floor, dedup in the store so a restart cannot page twice
+- [x] **YAML config + CLI** — `prahari validate | verify | collect | run | status`. No secrets in config
+- [x] **Docker collector** — non-root, read-only rootfs, caps dropped, healthcheck
+- [x] **Bug found & fixed:** alerts on an INR estate were labelled **USD** — every rule hardcoded the currency, an 84× misstatement of the number the alert exists to convey
+- [x] **Bug found & fixed:** DuckDB `INSERT OR REPLACE` at 26 ms/row (~200 s per batch) would have made incremental collection impossible. Set-based bulk upsert is 540× faster
+- [x] **Bug found & fixed:** the GCP connector's synchronous BigQuery call blocked the event loop, stalling every other collector
+
 ### Security & performance review (`docs/SECURITY_REVIEW.md`)
 - [x] Full-codebase security review — 5 findings, all fixed, all pinned by tests in `tests/test_security.py`
   - **High:** SQL injection via the BigQuery table identifier (unavoidably interpolated; now allowlisted)

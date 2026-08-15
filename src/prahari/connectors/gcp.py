@@ -30,6 +30,7 @@ NOT YET EXERCISED against a live billing export - see ASSUMPTIONS.md A8.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 from datetime import UTC, datetime
@@ -178,18 +179,26 @@ class GCPBillingConnector(Connector):
         from google.cloud import bigquery
 
         client = self._bq()
-        job = client.query(
-            USAGE_QUERY.format(table=self._table()),
-            job_config=bigquery.QueryJobConfig(
-                query_parameters=[
-                    bigquery.ScalarQueryParameter("start", "TIMESTAMP", start),
-                    bigquery.ScalarQueryParameter("end", "TIMESTAMP", end),
-                    bigquery.ScalarQueryParameter(
-                        "cost_centre_label", "STRING", self._cost_centre_label
-                    ),
-                ]
-            ),
-        )
+
+        def _run() -> list[Any]:
+            job = client.query(
+                USAGE_QUERY.format(table=self._table()),
+                job_config=bigquery.QueryJobConfig(
+                    query_parameters=[
+                        bigquery.ScalarQueryParameter("start", "TIMESTAMP", start),
+                        bigquery.ScalarQueryParameter("end", "TIMESTAMP", end),
+                        bigquery.ScalarQueryParameter(
+                            "cost_centre_label", "STRING", self._cost_centre_label
+                        ),
+                    ]
+                ),
+            )
+            return list(job)
+
+        # The BigQuery client is synchronous and a billing-export query can run for
+        # minutes. Called directly it would block the event loop and stall every
+        # other collector - including the fast Anthropic path that catches attacks.
+        job = await asyncio.to_thread(_run)
 
         now = datetime.now(UTC)
         records: list[UsageRecord] = []

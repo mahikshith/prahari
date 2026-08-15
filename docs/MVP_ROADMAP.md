@@ -17,18 +17,31 @@ it is out of scope, however tempting.
 
 ## Where we actually are
 
+*Updated after the Phase B build. 205 tests, ruff clean.*
+
 | Built and tested | Built but **never run for real** | Not built |
 |---|---|---|
-| Detection engine, 5 rules | Anthropic connector | Persistence (`store/` is empty) |
-| Baselines, aggregation | OpenAI connector | Collector daemon / scheduler |
-| Budget engine + scoping | GCP billing connector | Alert delivery |
-| Insights, rankings, FX | Price registry (live-fetched once) | Config file |
-| Backtest (synthetic) | | Docker packaging |
-| Report CLI | | Enforcement actions |
-| 154 tests, security review | | GCP audit-log connector |
+| Detection engine, 5 rules | Anthropic connector | Enforcement actions (E) |
+| Baselines, aggregation | OpenAI connector | GCP audit-log connector (C1) |
+| Budget engine + scoping | GCP billing connector | Streamlit view (D1) |
+| Insights, rankings, FX | Price registry | Multi-tenant / auth / UI |
+| **DuckDB store** (A3) | | |
+| **Collector daemon** (B1) | | |
+| **Alert delivery** (B2) | | |
+| **YAML config + CLI** (B3) | | |
+| **Docker collector** (B4) | | |
+| Backtest, report CLI | | |
 
-**The honest summary: the analysis layer is real, and the plumbing that would make it
-a product does not exist yet.** Nothing has ever touched a live provider API.
+**The honest summary: the collector is now a running program rather than a set of
+scripts — but nothing has still ever touched a live provider API.** Phase A remains
+the critical path and remains blocked on credentials.
+
+Try it without any credentials at all:
+
+```powershell
+uv run prahari validate -c prahari.example.yaml   # exits 2: config good, creds missing
+uv run prahari status   -c prahari.example.yaml
+```
 
 ---
 

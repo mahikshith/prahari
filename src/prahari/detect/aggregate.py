@@ -85,6 +85,10 @@ def _collapse(key: DetectionKey, hour: datetime, group: list[UsageRecord]) -> Ob
         asn=ext("asn"),
         model=dominant.model,
         max_context_utilisation=max(utilisations, default=0.0),
+        # Taken from the spend-dominant record. Alerts quote this currency, and
+        # labelling a rupee figure as dollars misstates the one number the alert
+        # exists to convey.
+        currency=dominant.currency,
     )
 
 

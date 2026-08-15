@@ -14,7 +14,11 @@ dependencies = [
     "python-dateutil>=2.9",
     "rich>=13.9",
     "google-cloud-bigquery>=3.43.0",
+    "pyyaml>=6.0.3",
 ]
+
+[project.scripts]
+prahari = "prahari.cli:main"
 
 [project.optional-dependencies]
 api = ["fastapi>=0.115", "uvicorn[standard]>=0.32"]

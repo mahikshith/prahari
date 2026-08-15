@@ -1,0 +1,133 @@
+# Prahari collector configuration.
+#
+# Copy to prahari.yaml and edit. Validate before running anything:
+#     prahari validate -c prahari.yaml
+#     prahari verify   -c prahari.yaml
+#
+# NO SECRETS IN THIS FILE. Credentials are named here and supplied by the
+# environment, so this file stays safe to commit, share in a support thread, or
+# paste into a bug report.
+
+store:
+  path: data/warehouse/prahari.duckdb
+
+# ---------------------------------------------------------------------------
+# Collectors
+# ---------------------------------------------------------------------------
+# settling_lag: never collect closer to now than this. Providers backfill their
+# own data for a while, and treating a still-filling window as final produces a
+# total that changes tomorrow.
+
+collectors:
+  - provider: anthropic
+    account_id: org_REPLACE_ME
+    # Anthropic lands data in ~5 min and permits one poll per minute - the
+    # fastest surface we have, and the one that catches attacks.
+    poll_interval: 5m
+    settling_lag: 10m
+    initial_lookback: 7d
+    # requires ANTHROPIC_ADMIN_KEY  (sk-ant-admin..., not a normal API key)
+
+  - provider: openai
+    account_id: org-REPLACE_ME
+    poll_interval: 15m
+    settling_lag: 15m
+    initial_lookback: 7d
+    # requires OPENAI_ADMIN_KEY with api.usage.read and api.costs.read
+
+  - provider: gcp_vertex
+    account_id: REPLACE_ME-billing-account
+    # The BigQuery billing export lags 4-24h with no guarantee, so polling it
+    # faster than hourly only costs query spend.
+    poll_interval: 1h
+    settling_lag: 6h
+    initial_lookback: 30d
+    extra:
+      billing_project: my-billing-project
+      billing_dataset: billing_export
+      billing_table: gcp_billing_export_v1_0123AB_4567CD_89EF01
+    # requires GOOGLE_APPLICATION_CREDENTIALS pointing at a service-account key
+    # with roles/bigquery.dataViewer on the export dataset
+
+# ---------------------------------------------------------------------------
+# Detection
+# ---------------------------------------------------------------------------
+
+detection:
+  enabled: true
+  # Feeds MODEL_ESCALATION: an abrupt switch to a premium model on a credential
+  # that never used one. Attackers reselling stolen access optimise for output
+  # quality, not cost.
+  premium_model_providers:
+    - anthropic
+    - openai
+
+# ---------------------------------------------------------------------------
+# Budgets
+# ---------------------------------------------------------------------------
+# Scope by any combination of: provider, account_id, project_id, workspace_id,
+# api_key_id, user_id, model, region, cost_centre, parent_entity, service,
+# service_category, sku, project_name.
+#
+# enforcement: alert_only (default) | throttle | hard_stop
+# Enforcement is dry-run today - it reports what it would do and does not act.
+
+budgets:
+  - id: org-ai-monthly
+    name: Organisation AI spend
+    amount: 6000000           # Rs 60 lakh
+    currency: INR
+    period: monthly
+    scope:
+      service_category: ai
+    thresholds: [0.5, 0.8, 1.0]
+    owner: cto@example.com
+
+  # A rupee limit on one service inside one project.
+  - id: customer-api-cloud-run
+    name: Customer API - Cloud Run
+    amount: 200000            # Rs 2 lakh
+    currency: INR
+    period: monthly
+    scope:
+      project_id: customer-api
+      service: Cloud Run
+    enforcement: hard_stop
+    owner: platform@example.com
+
+  - id: data-platform-bigquery
+    name: Data Platform - BigQuery
+    amount: 1500000           # Rs 15 lakh
+    currency: INR
+    period: monthly
+    scope:
+      project_id: data-platform
+      service: BigQuery
+    owner: data@example.com
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+# An alert nobody receives is not detection. Deduplication is handled by the
+# store: one alert per rule, per credential, per hour, however many cycles see
+# it.
+
+alerts:
+  min_severity: warning       # info | warning | critical
+  console: true
+  slack:
+    enabled: false
+    webhook_url_env: PRAHARI_SLACK_WEBHOOK
+  smtp:
+    enabled: false
+    host: smtp.example.com
+    port: 587
+    use_tls: true
+    from_address: prahari@example.com
+    to_addresses:
+      - finops@example.com
+      - security@example.com
+    username_env: PRAHARI_SMTP_USER
+    password_env: PRAHARI_SMTP_PASSWORD
+
+display_currency: INR

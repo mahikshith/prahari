@@ -160,6 +160,11 @@ class TestBacktest:
         again = run(generate(self.scenario), self.scenario)
         assert again.total_spend_at_invoice == self.result.total_spend_at_invoice
 
+    def test_alert_currency_follows_the_records(self):
+        """Regression: currency was hardcoded to USD in every rule, so an Indian
+        estate's rupee figures were labelled as dollars."""
+        assert all(a.currency == "USD" for a in self.result.attack_alerts)
+
     def test_output_is_labelled_synthetic(self):
         """Guards ASSUMPTIONS.md A1 — a modelled number must never leave this repo
         looking measured."""

@@ -1,0 +1,50 @@
+# Prahari collector - runs inside the customer's own VPC.
+#
+#   cp prahari.example.yaml prahari.yaml   && edit
+#   cp .env.example .env                   && fill in
+#   docker compose run --rm collector validate
+#   docker compose run --rm collector verify
+#   docker compose up -d
+#
+# Credentials come from .env or a mounted service-account file. Nothing is baked
+# into the image, and nothing but aggregated cost records leaves this host.
+
+services:
+  collector:
+    build: .
+    image: prahari-collector:local
+    container_name: prahari-collector
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    volumes:
+      # Config is read-only: the collector must never be able to rewrite its own
+      # budgets or alert routing.
+      - ./prahari.yaml:/app/prahari.yaml:ro
+      # GCP service-account key, if used. Read-only, and never copied into the image.
+      - ./secrets:/secrets:ro
+      - prahari-data:/data
+
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-service-account.json
+
+    # Defence in depth. The collector makes outbound HTTPS calls and writes to
+    # /data; it needs nothing else.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  prahari-data:

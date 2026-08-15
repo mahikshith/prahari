@@ -6,6 +6,19 @@ Architectural and licence decisions are recorded here as well as code changes �
 
 ## [Unreleased]
 
+### Added — the collector became a running program (roadmap A3, B1–B4)
+- **DuckDB store** (`store/duck.py`). Idempotent upserts keyed on a deterministic `record_id`, so a re-fetched window replaces rather than double-counts — and a `PARTIAL` hour is overwritten by its `FINAL` version. Watermarks that never rewind, alert deduplication, and budget-threshold state.
+- **Collector daemon** (`collector/daemon.py`). Watermark-driven incremental fetch, per-collector settling lag, concurrent collection with failures isolated per provider, exponential backoff with jitter, capped catch-up windows, graceful shutdown.
+- **Alert delivery** (`notify/router.py`). Console, Slack webhook and SMTP, with a severity floor. Deduplication lives in the store, so a restart or overlapping cycles cannot page twice.
+- **YAML config** (`core/config.py`) validated at load, and a **CLI** (`prahari validate | verify | collect | run | status`). No secrets in config: credentials are named, the environment supplies them.
+- **Docker collector** (`Dockerfile`, `docker-compose.yml`). Non-root, read-only root filesystem, all capabilities dropped, healthcheck via `prahari validate`. This is the security architecture — the customer runs it in their VPC and credentials never cross our boundary.
+
+### Fixed
+- **Alerts on an INR estate were labelled USD.** Every rule hardcoded `currency="USD"`, so rupee figures were reported as dollars — an 84× misstatement of the one number an alert exists to convey. `Observation` now carries the currency from the spend-dominant record.
+- **DuckDB `INSERT OR REPLACE` measured 26 ms per row** — ~200 seconds for a single 7,440-record batch, which would have made incremental collection impossible. Replaced with a registered batch and set-based delete-then-insert inside one transaction: **0.05 ms/row, ~540× faster**.
+- Slack notifications defaulted to enabled, so `missing_env()` demanded a webhook from every install that never asked for Slack — training people to ignore the startup warning. Now off by default, matching SMTP.
+- The GCP connector's synchronous BigQuery query blocked the event loop, stalling every other collector including the fast Anthropic detection path. Now wrapped in `asyncio.to_thread`.
+
 ### Security — full-codebase review, all findings fixed
 Written up in `docs/SECURITY_REVIEW.md`; each is pinned by a regression test in `tests/test_security.py`.
 

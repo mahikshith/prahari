@@ -84,6 +84,10 @@ class Observation:
     asn: str | None = None
     model: str | None = None
     max_context_utilisation: float = 0.0
+    currency: str = "USD"
+    """Carried through to the alert. Previously hardcoded to USD in every rule, which
+    labelled an Indian estate's rupee figures as dollars - an 84x misstatement in the
+    one number the alert exists to convey."""
 
     def __post_init__(self) -> None:
         if self.hour.tzinfo is None:
@@ -232,7 +236,7 @@ def spend_spike(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert 
             multiple=None,
             spend_so_far=spend_so_far,
             projected_24h=_project_24h(obs.spend),
-            currency="USD",
+            currency=obs.currency,
             evidence={
                 "reason": "no prior spend on this credential",
                 "samples": bl.sample_count,
@@ -255,7 +259,7 @@ def spend_spike(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert 
         multiple=multiple,
         spend_so_far=spend_so_far,
         projected_24h=_project_24h(obs.spend),
-        currency="USD",
+        currency=obs.currency,
         evidence={
             "threshold": str(SPEND_SPIKE_MULTIPLE),
             "stdev": str(bl.spend_stdev()),
@@ -292,7 +296,7 @@ def dormant_key_wake(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> A
         multiple=None,
         spend_so_far=spend_so_far,
         projected_24h=_project_24h(obs.spend),
-        currency="USD",
+        currency=obs.currency,
         evidence={
             "idle_days": idle.days,
             "last_seen": bl.last_seen.isoformat(),
@@ -330,7 +334,7 @@ def new_geo(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | No
         multiple=None,
         spend_so_far=spend_so_far,
         projected_24h=_project_24h(obs.spend),
-        currency="USD",
+        currency=obs.currency,
         evidence=novel,
     )
 
@@ -361,7 +365,7 @@ def model_escalation(
         multiple=None,
         spend_so_far=spend_so_far,
         projected_24h=_project_24h(obs.spend),
-        currency="USD",
+        currency=obs.currency,
         evidence={"new_model": obs.model, "previous_models": sorted(bl.known_models)},
     )
 
@@ -396,7 +400,7 @@ def resale_pattern(window: list[Observation], bl: Baseline, spend_so_far: Decima
         multiple=None,
         spend_so_far=spend_so_far,
         projected_24h=_project_24h(latest.spend),
-        currency="USD",
+        currency=latest.currency,
         evidence={
             "sustained_hours": len(qualifying),
             "context_utilisation": round(

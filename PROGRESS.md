@@ -105,7 +105,12 @@ more code.
 
 **Ranked. The first two need Mahikshith; the rest don't.**
 
-1. **[NEEDS YOU — 2 min] Run `scripts/setup_remote.ps1`** to create the private GitHub repo and push. Requires a browser login. If `gh` isn't installed yet: `winget install --id GitHub.cli`, then a new terminal.
+1. **[NEEDS YOU — 1 min] Run `scripts/setup_remote.ps1`** to create the private GitHub repo and push.
+   `gh` 2.97.0 is **already installed** (`C:\Program Files\GitHub CLI\gh.exe`) and the script finds it there, so all that's left is the browser login — which binds your GitHub identity to this machine and is therefore yours to do:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts\setup_remote.ps1
+   ```
+   It creates the repo **private**, and refuses to run if `.env` is tracked or a pre-existing repo is public.
 2. **[BLOCKED — needs Mahikshith] Settle the IP/data-use position.** Everything touching employer data waits on this. `ASSUMPTIONS.md` A2. Cheapest item on the list, largest blast radius.
 3. **[BLOCKED — needs Mahikshith] GCP billing export access** for the incident window. Re-run the backtest on real data, delete the synthetic banner from the case study.
 4. **[READY] Start the 30 discovery calls.** Still the critical path — the gates decide whether any more code is worth writing. Nothing blocks it.

@@ -158,8 +158,8 @@ Services are tagged `ai` / `data` / `compute` / `other` (`connectors/gcp.py: cla
 
 ## A10 🟢 No GitHub remote created
 
-**Assumed:** the repo stays local until Mahikshith authorises a remote.
+**Assumed:** the repo stays local until Mahikshith runs the push himself.
 
-**Why:** pushing publishes the incident narrative, the strategy, and the competitive analysis. That is an outward-facing action and his call, not mine.
+**Why:** pushing publishes the incident narrative, the strategy and the competitive analysis — outward-facing, and his call. Separately, `gh auth login` opens a browser and binds his GitHub identity to this machine, which is not something to automate around.
 
-**Verify:** ask. A private remote is a minute's work once authorised.
+**Status:** `gh` 2.97.0 is installed at `C:\Program Files\GitHub CLI\gh.exe` and unauthenticated. `scripts/setup_remote.ps1` finds it there, creates the repo **private**, and refuses to run if `.env` is tracked or a pre-existing repo is public. One command and a browser login away.

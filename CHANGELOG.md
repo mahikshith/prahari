@@ -6,6 +6,17 @@ Architectural and licence decisions are recorded here as well as code changes �
 
 ## [Unreleased]
 
+### Added — budgets, allocation insights, FX
+- **Budget engine** (`core/budget.py`). Budgets scoped by an arbitrary set of dimensions rather than a single enum, so every shape customers ask for falls out of one model — org-wide, per-project, per-service, per-cost-centre, per-user, per-credential, and the composite case (₹2 lakh on Cloud Run *inside* one project). Burn rate, linear forecast, projected overage, exhaustion date, threshold crossing with re-fire suppression, and top contributors.
+- **Enforcement policy with dry-run default** (`decide_enforcement`). `ALERT_ONLY` / `THROTTLE` / `HARD_STOP`. `would_affect` lists the credentials an action would hit and is computed even in dry-run, because that list is the entire content of the conversation where a customer decides whether to grant write access.
+- **Consumption insights** (`core/insights.py`). Per-user token consumption with blended ₹/M-token, top and bottom consumers by any dimension, period-over-period movers ranked by absolute change, allocation coverage against the 85% target (F3.2), and the AI-vs-cloud category split.
+- **Dated FX** (`core/fx.py`). INR budgets against USD provider costs, using the rate in force on the transaction date. Never interpolates forward, never guesses a missing rate. Indian digit grouping and lakh/crore scaling.
+- **Synthetic fleet** (`synth/fleet.py`) — four projects, four services, five users, a month of ordinary spend, with a deliberate Cloud Run blowout, a single catastrophic BigQuery query day, and an unlabelled slice so allocation coverage reports an honest number.
+- `scripts/report.py` — the FinOps-lead view end to end.
+
+### Fixed
+- **Budget periods now close on IST calendar boundaries, and the fleet scenario is aligned to them.** Indian finance closes on IST; computing month bounds in UTC put 5.5 hours of spend in the following month. The synthetic fleet spanned a UTC month, so `as_of` landed in August and every budget evaluated against a nearly empty period while still reporting a confident number. Two regression tests pin it.
+
 ### Added — GCP coverage
 - **GCP BigQuery billing export connector** covering every GCP service in one query: Vertex AI, BigQuery, Cloud Run, Compute, Storage, egress. Net-of-credits cost arithmetic, `_PARTITIONTIME` pruning, hourly buckets keyed on usage time rather than export time, billing-account currency preserved (Indian accounts export INR natively), `ai`/`data`/`compute` service classification, and unit economics for the two services customers ask about most after AI — BigQuery TiB scanned and Cloud Run vCPU-hours.
 - `scripts/setup_remote.ps1` — creates the **private** GitHub repo and pushes. Refuses to run if `.env` is tracked or if a pre-existing repo is public.

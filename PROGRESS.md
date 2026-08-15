@@ -58,6 +58,14 @@ more code.
 - [x] Mocked tests for all three (**not** exercised against live APIs — `ASSUMPTIONS.md` A8)
 - [x] **Bug found & fixed:** `detection_key` fallback skipped `project_id`, so every GCP project would have collapsed into one org-wide baseline and a noisy project would mask an attack in a quiet one.
 
+### Budgets, allocation and insights
+- [x] **Budget engine** — arbitrary scope dimensions, so org / project / service / cost-centre / user / credential and the composite case (₹2 lakh Cloud Run inside one project) all come from one model. Burn rate, forecast, projected overage, exhaustion date, threshold re-fire suppression, ranked contributors.
+- [x] **Enforcement policy, dry-run by default** — `ALERT_ONLY` / `THROTTLE` / `HARD_STOP`, with `would_affect` computed even in dry-run.
+- [x] **Insights** — per-user token consumption with blended ₹/M-token, top/bottom consumers by any dimension, movers vs prior period, allocation coverage vs the 85% target, AI-vs-cloud split.
+- [x] **Dated FX** — INR budgets against USD costs, rate in force on the transaction date, no forward interpolation, no guessing.
+- [x] Synthetic fleet + `scripts/report.py`
+- [x] **Bug found & fixed:** budget periods must close on **IST** boundaries. The fleet spanned a UTC month, so 5.5 hours spilled over, `as_of` landed in the next month, and every budget evaluated against a nearly empty period while still printing a confident number.
+
 ### Repo
 - [x] `scripts/setup_remote.ps1` — one command to create the **private** GitHub repo and push. Needs an interactive browser login, so it's yours to run. It refuses to push if `.env` is tracked or if an existing repo is public.
 

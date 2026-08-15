@@ -66,6 +66,16 @@ more code.
 - [x] Synthetic fleet + `scripts/report.py`
 - [x] **Bug found & fixed:** budget periods must close on **IST** boundaries. The fleet spanned a UTC month, so 5.5 hours spilled over, `as_of` landed in the next month, and every budget evaluated against a nearly empty period while still printing a confident number.
 
+### Security & performance review (`docs/SECURITY_REVIEW.md`)
+- [x] Full-codebase security review — 5 findings, all fixed, all pinned by tests in `tests/test_security.py`
+  - **High:** SQL injection via the BigQuery table identifier (unavoidably interpolated; now allowlisted)
+  - **High:** `Decimal("Infinity")` from a provider compares greater than every budget limit → under `HARD_STOP` that revokes production credentials. Rejected at the model boundary now.
+  - **Medium:** price registry skipped checksum verification when the `.sha256` was absent — deleting it was enough to swap pricing data
+  - **Medium:** `raise_for_status()` exceptions carry the request, whose headers hold the admin key; any error tracker would exfiltrate it
+  - **Low:** `out/` not gitignored
+- [x] **Budget evaluation 4.6× faster** (40 budgets: 386 ms → 84 ms) via `(period, currency)` grouping + an inverted scope index. Marginal cost per budget 9.7 ms → 1.9 ms.
+- [x] **Bounded detector state** — `hour_of_week_spend` was uncapped and would leak memory and slow down over a long run
+
 ### Repo
 - [x] `scripts/setup_remote.ps1` — one command to create the **private** GitHub repo and push. Needs an interactive browser login, so it's yours to run. It refuses to push if `.env` is tracked or if an existing repo is public.
 

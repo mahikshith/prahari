@@ -22,6 +22,7 @@ silently into a billed total (docs/REQUIREMENTS.md F2.2).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 from dataclasses import dataclass
 from decimal import Decimal
@@ -84,15 +85,24 @@ def _load_raw() -> dict[str, dict]:
 
     raw_bytes = VENDORED_PATH.read_bytes()
 
-    if CHECKSUM_PATH.exists():
-        expected = CHECKSUM_PATH.read_text(encoding="utf-8").split()[0].strip()
-        actual = hashlib.sha256(raw_bytes).hexdigest()
-        if actual != expected:
-            raise RegistryError(
-                "Price registry checksum mismatch — refusing to load.\n"
-                f"  expected {expected}\n  actual   {actual}\n"
-                "Re-run scripts/fetch_pricing_registry.py and review the diff."
-            )
+    # Fail closed. Skipping verification when the checksum file is absent would mean
+    # an attacker who can write this directory need only delete the .sha256 to swap
+    # the price data - and this data drives every cost figure and every budget
+    # decision, including enforcement.
+    if not CHECKSUM_PATH.exists():
+        raise RegistryError(
+            f"Price registry checksum missing at {CHECKSUM_PATH}. Refusing to load "
+            "unverified pricing data. Run: python scripts/fetch_pricing_registry.py"
+        )
+
+    expected = CHECKSUM_PATH.read_text(encoding="utf-8").split()[0].strip()
+    actual = hashlib.sha256(raw_bytes).hexdigest()
+    if not hmac.compare_digest(actual, expected):
+        raise RegistryError(
+            "Price registry checksum mismatch - refusing to load.\n"
+            f"  expected {expected}\n  actual   {actual}\n"
+            "Re-run scripts/fetch_pricing_registry.py and review the diff."
+        )
 
     data = json.loads(raw_bytes)
     # LiteLLM ships a 'sample_spec' pseudo-entry documenting the schema.
@@ -145,7 +155,8 @@ def _build(name: str, entry: dict) -> ModelPrice | None:
     )
 
 
-def premium_models(provider: str, top_n: int = 15) -> set[str]:
+@lru_cache(maxsize=32)
+def _premium_models_cached(provider: str, top_n: int) -> frozenset[str]:
     """The most expensive models by output rate for one provider - input to the
     MODEL_ESCALATION rule. Attackers reselling stolen access optimise for output
     quality, not cost; they did not pay for it.
@@ -162,4 +173,10 @@ def premium_models(provider: str, top_n: int = 15) -> set[str]:
         if e.get("output_cost_per_token") and e.get("litellm_provider") == provider
     ]
     priced.sort(key=lambda p: p[1] or Decimal(0), reverse=True)
-    return {name for name, _ in priced[:top_n]}
+    return frozenset(name for name, _ in priced[:top_n])
+
+
+def premium_models(provider: str, top_n: int = 15) -> set[str]:
+    """See `_premium_models_cached`. Scanning 2,400+ models per call showed up in
+    the detector's setup path; the answer only changes when the registry does."""
+    return set(_premium_models_cached(provider, top_n))

@@ -27,7 +27,13 @@ from typing import Any
 
 import httpx
 
-from prahari.connectors.base import Connector, FetchResult, ProviderConfig
+from prahari.connectors.base import (
+    Connector,
+    FetchResult,
+    ProviderConfig,
+    ProviderHTTPError,
+    raise_for_status_safely,
+)
 from prahari.core.models import (
     ChargeCategory,
     Completeness,
@@ -73,7 +79,9 @@ class OpenAIConnector(Connector):
                     query["page"] = page
 
                 resp = await client.get(path, params=query, headers=self._headers())
-                resp.raise_for_status()
+                # Never `raise_for_status()` here - the exception it raises holds the
+                # request, whose Authorization header contains the admin key.
+                raise_for_status_safely(resp, path)
                 body = resp.json()
 
                 for bucket in body.get("data", []):
@@ -222,8 +230,8 @@ class OpenAIConnector(Connector):
             ):
                 break
             return True
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in (401, 403):
+        except ProviderHTTPError as exc:
+            if exc.status_code in (401, 403):
                 return False
             raise
 

@@ -63,6 +63,10 @@ class FxTable:
 
     def __init__(self, rates: list[FxRate] | None = None) -> None:
         self._rates: dict[tuple[str, str], list[FxRate]] = {}
+        # Aggregation converts every record, so the same (pair, date) is looked up
+        # thousands of times per report. Cached rather than bisected each time;
+        # invalidated whenever the table changes.
+        self._cache: dict[tuple[str, str, date], FxRate] = {}
         for rate in rates if rates is not None else _default_rates():
             self.add(rate)
 
@@ -70,8 +74,18 @@ class FxTable:
         series = self._rates.setdefault((rate.base, rate.quote), [])
         series.append(rate)
         series.sort(key=lambda r: r.as_of)
+        self._cache.clear()
 
     def rate_on(self, base: str, quote: str, on: date) -> FxRate:
+        key = (base.upper(), quote.upper(), on)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        resolved = self._resolve(*key)
+        self._cache[key] = resolved
+        return resolved
+
+    def _resolve(self, base: str, quote: str, on: date) -> FxRate:
         """Rate in force on `on` - the most recent mark at or before that date.
 
         Deliberately never interpolates forward. A rate published after the

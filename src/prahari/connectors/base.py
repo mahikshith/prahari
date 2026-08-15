@@ -13,12 +13,49 @@ Every connector must be:
 
 from __future__ import annotations
 
+import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+import httpx
+
 from prahari.core.models import Provider, UsageRecord
+
+
+class ProviderHTTPError(RuntimeError):
+    """A provider HTTP failure, stripped of anything sensitive.
+
+    `httpx.HTTPStatusError` keeps a reference to the originating request, and that
+    request's headers hold the admin API key. Anything that serialises the exception
+    - an error tracker, a log line with `exc_info`, a traceback rendered with locals -
+    exfiltrates the credential to a third party.
+
+    Connectors therefore convert HTTP failures into this type at the boundary. It
+    carries the status code (callers need it to distinguish 401 from 500) and the
+    request path, and nothing else.
+    """
+
+    def __init__(self, status_code: int, path: str, detail: str = "") -> None:
+        self.status_code = status_code
+        self.path = path
+        suffix = f": {detail}" if detail else ""
+        super().__init__(f"provider returned {status_code} for {path}{suffix}")
+
+
+def raise_for_status_safely(response: httpx.Response, path: str) -> None:
+    """`raise_for_status`, without dragging credentials into the traceback."""
+    if response.is_success:
+        return
+
+    # The body may carry a useful provider message, but could also echo input. Cap it,
+    # and never let error handling itself raise.
+    detail = ""
+    with contextlib.suppress(Exception):
+        detail = response.text[:200]
+
+    raise ProviderHTTPError(response.status_code, path, detail) from None
 
 
 @dataclass(frozen=True, slots=True)

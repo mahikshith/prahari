@@ -31,6 +31,7 @@ NOT YET EXERCISED against a live billing export - see ASSUMPTIONS.md A8.
 from __future__ import annotations
 
 import os
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -44,6 +45,7 @@ from prahari.core.models import (
     TokenCounts,
     UsageRecord,
 )
+from prahari.core.money import parse_money
 
 # --- service taxonomy ---------------------------------------------------------
 # Drives the AI-vs-cloud split in reporting. The wedge is AI; the North Star is
@@ -148,7 +150,18 @@ class GCPBillingConnector(Connector):
                 "GCP_BILLING_DATASET and GCP_BILLING_TABLE (typically "
                 "gcp_billing_export_v1_<BILLING_ACCOUNT_ID>)."
             )
-        return f"{project}.{dataset}.{table}"
+
+        # A table identifier cannot be a bound parameter in BigQuery, so it is
+        # interpolated into the SQL. That makes it an injection sink, and it will not
+        # always come from a trusted env var - in the multi-tenant control plane it
+        # arrives from per-tenant configuration. Validate as an allowlist.
+        return ".".join(
+            (
+                _validate_identifier(project, "billing_project", allow_domain=True),
+                _validate_identifier(dataset, "billing_dataset"),
+                _validate_identifier(table, "billing_table"),
+            )
+        )
 
     def _bq(self):
         if self._client is not None:
@@ -215,8 +228,11 @@ class GCPBillingConnector(Connector):
         sku = row["sku"] or ""
         category = classify(service)
 
-        gross = Decimal(str(row["gross_cost"] or 0))
-        credits = Decimal(str(row["credit_amount"] or 0))  # negative
+        # BigQuery FLOAT64 can legitimately hold NaN and Infinity. Parsed, not cast:
+        # an infinite cost compares as greater than every budget limit and would drive
+        # HARD_STOP revocation against production. See core/money.py.
+        gross = parse_money(row["gross_cost"], field="gross_cost", default=Decimal(0))
+        credits = parse_money(row["credit_amount"], field="credit_amount", default=Decimal(0))
         net = gross + credits
 
         hour = _as_utc(row["hour"])
@@ -279,6 +295,32 @@ class GCPBillingConnector(Connector):
             return job is not None
         except Exception:
             return False
+
+
+# --- identifier validation ----------------------------------------------------
+
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,1024}$")
+_DOMAIN_SCOPED = re.compile(r"^[A-Za-z0-9.-]{1,255}:[A-Za-z0-9_-]{1,63}$")
+"""Legacy domain-scoped GCP projects look like `example.com:my-project`."""
+
+
+def _validate_identifier(value: str, field: str, *, allow_domain: bool = False) -> str:
+    """Allowlist a BigQuery identifier before it is interpolated into SQL.
+
+    Table names cannot be bound parameters, so this is the only defence. Rejecting
+    anything outside `[A-Za-z0-9_-]` blocks backticks, quotes, semicolons, whitespace
+    and comment markers - the whole injection vocabulary - without needing to reason
+    about BigQuery's escaping rules.
+    """
+    value = value.strip()
+    if _IDENTIFIER.match(value):
+        return value
+    if allow_domain and _DOMAIN_SCOPED.match(value):
+        return value
+    raise ValueError(
+        f"{field} is not a valid BigQuery identifier: {value!r}. "
+        "Only letters, digits, underscores and hyphens are permitted."
+    )
 
 
 # --- SKU interpretation -------------------------------------------------------

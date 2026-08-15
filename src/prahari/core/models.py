@@ -17,6 +17,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from prahari.core.money import is_safe_money
+
 
 class Provider(StrEnum):
     ANTHROPIC = "anthropic"
@@ -190,6 +192,21 @@ class UsageRecord(BaseModel):
     def _require_tz(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
             raise ValueError("timestamps must be timezone-aware and stored in UTC")
+        return v
+
+    @field_validator("billed_cost", "list_cost")
+    @classmethod
+    def _require_finite_money(cls, v: Decimal | None) -> Decimal | None:
+        """Reject NaN and Infinity at the single choke point every record passes.
+
+        `Decimal("Infinity") > Decimal(any_budget)` is True, so an infinite cost from
+        a malformed upstream response would mark every budget exceeded and, under
+        HARD_STOP, drive credential revocation against production. NaN is quieter:
+        it survives every `sum()` in the aggregation path and then raises far from
+        the record that caused it. See core/money.py.
+        """
+        if v is not None and not is_safe_money(v):
+            raise ValueError(f"cost must be finite and plausible, got {v}")
         return v
 
     @model_validator(mode="after")

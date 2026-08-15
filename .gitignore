@@ -13,6 +13,11 @@ secrets/
 # === Customer / incident data — never commit. ===
 data/
 !data/.gitkeep
+# Report and backtest output: contains real spend figures once connectors are live.
+out/
+*.duckdb.tmp
+probe.py
+bench.py
 *.duckdb
 *.duckdb.wal
 *.parquet

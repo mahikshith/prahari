@@ -6,6 +6,20 @@ Architectural and licence decisions are recorded here as well as code changes �
 
 ## [Unreleased]
 
+### Security — full-codebase review, all findings fixed
+Written up in `docs/SECURITY_REVIEW.md`; each is pinned by a regression test in `tests/test_security.py`.
+
+- **High — SQL injection via the BigQuery table identifier.** Table names cannot be bound parameters, so `project.dataset.table` is interpolated into the query; it was unvalidated. Harmless from an env var, exploitable once per-tenant config supplies it in the multi-tenant control plane. Now allowlisted to `[A-Za-z0-9_-]` plus the legacy domain-scoped project form.
+- **High — non-finite costs drove false enforcement.** `Decimal` accepts `Infinity`, which compares greater than every budget limit, so a malformed upstream response would mark all budgets exceeded and, under `HARD_STOP`, revoke production credentials. `NaN` propagated silently through every `sum()` and raised far from its cause. Added `core/money.py` plus a `UsageRecord` validator at the single choke point.
+- **Medium — price registry failed open.** Checksum verification was skipped when the `.sha256` file was absent, so deleting it was enough to swap the pricing data that drives every cost figure and enforcement decision. Now a hard error, compared with `hmac.compare_digest`.
+- **Medium — admin keys leaked through HTTP exceptions.** `raise_for_status()` produces an error holding the request, whose headers contain the admin key; any error tracker or `exc_info` log line would exfiltrate it. Replaced with `raise_for_status_safely()` → `ProviderHTTPError`, carrying only status, path and a truncated body, raised `from None`.
+- **Low — report output not gitignored.** `out/` will hold real spend figures once connectors are live.
+
+### Performance
+- **Budget evaluation: 5 budgets 46 ms → 17 ms, 40 budgets 386 ms → 84 ms.** Marginal cost per budget fell 9.7 ms → 1.9 ms. Budgets are grouped by `(period, currency)` so windowing and currency conversion happen once; `PreparedWindow` then carries an inverted `dimension → value → row indices` index, so a scoped budget visits only its own rows instead of all of them. Correctness pinned by tests comparing the indexed path against a naive scan across six scope shapes.
+- **Bounded detector state.** `Baseline.hour_of_week_spend` was uncapped — 9,600 entries after a 400-day replay, with `expected_spend` averaging an ever-longer list. Capped at 8 samples per hour-of-week slot; `hourly_spend` is now a `deque(maxlen=…)` since `list.pop(0)` is O(n).
+- Cached FX rate lookups and `premium_models()`.
+
 ### Added — budgets, allocation insights, FX
 - **Budget engine** (`core/budget.py`). Budgets scoped by an arbitrary set of dimensions rather than a single enum, so every shape customers ask for falls out of one model — org-wide, per-project, per-service, per-cost-centre, per-user, per-credential, and the composite case (₹2 lakh on Cloud Run *inside* one project). Burn rate, linear forecast, projected overage, exhaustion date, threshold crossing with re-fire suppression, and top contributors.
 - **Enforcement policy with dry-run default** (`decide_enforcement`). `ALERT_ONLY` / `THROTTLE` / `HARD_STOP`. `would_affect` lists the credentials an action would hit and is computed even in dry-run, because that list is the entire content of the conversation where a customer decides whether to grant write access.

@@ -14,6 +14,7 @@ in principle. Our target is a median detection under 60 minutes.
 from __future__ import annotations
 
 import statistics
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -41,6 +42,14 @@ than a confident wrong one."""
 BUSINESS_HOURS_IST = range(9, 21)
 RESALE_CONTEXT_UTILISATION = 0.85
 RESALE_MIN_HOURS = 3
+
+SEASONAL_SAMPLES_PER_SLOT = 8
+"""Weeks of history kept per hour-of-week slot.
+
+Bounded deliberately. This dict was previously uncapped and grew one entry per
+observation forever - 9,600 entries after a 400-day replay, and `expected_spend`
+averaging an ever-longer list. Eight weeks is enough to establish a weekday pattern
+and keeps the structure at a fixed 168 x 8."""
 
 DetectionKey = tuple[str, str]
 """(provider, credential). Deliberately excludes model and region - see
@@ -88,20 +97,27 @@ class Baseline:
     detector that cries wolf weekly gets muted, which is the same as not existing."""
 
     detection_key: DetectionKey
-    hourly_spend: list[Decimal] = field(default_factory=list)
-    hour_of_week_spend: dict[int, list[Decimal]] = field(default_factory=dict)
+    hourly_spend: deque[Decimal] = field(
+        default_factory=lambda: deque(maxlen=BASELINE_WINDOW_HOURS)
+    )
+    """A deque with maxlen: the window evicts from the left on every append, and
+    `list.pop(0)` is O(n) while `deque` eviction is O(1)."""
+
+    hour_of_week_spend: dict[int, deque[Decimal]] = field(default_factory=dict)
     last_seen: datetime | None = None
     known_countries: set[str] = field(default_factory=set)
     known_asns: set[str] = field(default_factory=set)
     known_models: set[str] = field(default_factory=set)
 
     def observe(self, obs: Observation) -> None:
-        self.hourly_spend.append(obs.spend)
-        if len(self.hourly_spend) > BASELINE_WINDOW_HOURS:
-            self.hourly_spend.pop(0)
+        self.hourly_spend.append(obs.spend)  # deque(maxlen=...) evicts for us
 
         how = _hour_of_week(obs.hour)
-        self.hour_of_week_spend.setdefault(how, []).append(obs.spend)
+        slot = self.hour_of_week_spend.get(how)
+        if slot is None:
+            slot = deque(maxlen=SEASONAL_SAMPLES_PER_SLOT)
+            self.hour_of_week_spend[how] = slot
+        slot.append(obs.spend)
 
         # `last_seen` tracks ACTIVITY, not observations. Zero-spend hours are fed in
         # to keep the spend baseline honest (a credential idle at 3am should not have

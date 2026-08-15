@@ -88,6 +88,11 @@ more code.
 
 ## Next up
 
+> **Full path to MVP, with dependencies and done-criteria: [docs/MVP_ROADMAP.md](docs/MVP_ROADMAP.md).**
+> The short version: the analysis layer is real, the plumbing that makes it a product
+> isn't, and **no connector has ever touched a live API** — that's the critical path
+> and the cheapest thing to fix.
+
 **Ranked. The first two need Mahikshith; the rest don't.**
 
 1. **[NEEDS YOU — 2 min] Run `scripts/setup_remote.ps1`** to create the private GitHub repo and push. Requires a browser login. If `gh` isn't installed yet: `winget install --id GitHub.cli`, then a new terminal.

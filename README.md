@@ -43,8 +43,10 @@ Cost tools see the bill but not the identity. Security tools see the credential 
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Deployment shape, pipeline, data model |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | Stack choices and rationale |
 | [docs/OSS_INVENTORY.md](docs/OSS_INVENTORY.md) | What we reuse instead of building, with licence audit |
-| [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) | Staged plan |
+| **[docs/MVP_ROADMAP.md](docs/MVP_ROADMAP.md)** | **What's left to build, in order, with dependencies** |
+| [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) | Staging philosophy and standing risks |
 | [docs/DECISION_GATES.md](docs/DECISION_GATES.md) | The five gates that decide whether this gets built |
+| [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) | Security findings and fixes; latency work |
 
 ## Setup
 

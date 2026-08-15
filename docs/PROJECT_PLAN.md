@@ -1,5 +1,11 @@
 # Project Plan
 
+> **For the concrete work breakdown from here to a working MVP, see
+> [MVP_ROADMAP.md](MVP_ROADMAP.md).** This document holds the staging philosophy and
+> the standing risks; the roadmap holds the ordered task list, dependencies and
+> done-criteria. Stage 0 below is complete (on synthetic data) and Stage 1 is partly
+> complete.
+
 Sequenced so that **each stage produces a sales artifact**, not just code. The research is unambiguous that distribution and trust — not engineering — decide this market, so nothing here builds for more than ~2 weeks without something to show a buyer.
 
 ## Stage 0 — The ₹6 crore backtest (now, ~1 week)

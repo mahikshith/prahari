@@ -6,6 +6,16 @@ Architectural and licence decisions are recorded here as well as code changes �
 
 ## [Unreleased]
 
+### Added — GCP coverage
+- **GCP BigQuery billing export connector** covering every GCP service in one query: Vertex AI, BigQuery, Cloud Run, Compute, Storage, egress. Net-of-credits cost arithmetic, `_PARTITIONTIME` pruning, hourly buckets keyed on usage time rather than export time, billing-account currency preserved (Indian accounts export INR natively), `ai`/`data`/`compute` service classification, and unit economics for the two services customers ask about most after AI — BigQuery TiB scanned and Cloud Run vCPU-hours.
+- `scripts/setup_remote.ps1` — creates the **private** GitHub repo and pushes. Refuses to run if `.env` is tracked or if a pre-existing repo is public.
+
+### Fixed
+- **`detection_key` fallback skipped `project_id`.** GCP's billing export carries no caller identity, so every project would have collapsed into a single org-wide baseline — a noisy project would mask an attack in a quiet one. Found by a test written specifically to pin the "no caller identity" limitation.
+
+### Discovered
+- **A11 — the GCP billing export has no caller identity.** It knows project, service, SKU and resource; never who called. GCP detection from billing alone is therefore project-level, and `DORMANT_KEY_WAKE` / `NEW_GEO` cannot work from it at all. Credential-level detection on GCP requires a second connector over Cloud Audit Logs (`principalEmail`, `callerIp`). The connector shipped here is the allocation half; the detection half is still missing.
+
 ### Added — autonomous session, 2026-08-15
 - Incident backtest (`scripts/backtest_incident.py`) producing the Stage 0 artifact: detection at ₹72,359, ten days and ₹5.84 crore before the invoice. Runs on synthetic data calibrated to published LLMjacking rates.
 - Synthetic incident generator (`src/prahari/synth/incident.py`) — two credentials: a legitimate control and a stale decommissioned key that leaks.

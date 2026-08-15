@@ -13,6 +13,7 @@ dependencies = [
     "statsmodels>=0.14",
     "python-dateutil>=2.9",
     "rich>=13.9",
+    "google-cloud-bigquery>=3.43.0",
 ]
 
 [project.optional-dependencies]

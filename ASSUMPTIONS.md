@@ -121,6 +121,41 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 ---
 
+## A11 🔴 GCP billing export carries no caller identity — detection there is project-level only
+
+**Discovered, not assumed** — but it changes the plan, so it belongs here.
+
+The BigQuery Cloud Billing export contains project, service, SKU, location and resource. It does **not** contain who made the call. There is no service account, no API key, no caller IP.
+
+**Consequence:** on GCP, the finest detection grain the billing export supports is the **project**. `DORMANT_KEY_WAKE` and `NEW_GEO` — the two rules that fired first and hardest in the backtest — cannot work from this source at all. And the export lags 4–24h, so it could not drive sub-hour detection even if it had identity.
+
+**What this means for the incident story:** the ₹6 crore detection narrative depends on credential-level signals. Those come from **Cloud Audit Logs** (`protoPayload.authenticationInfo.principalEmail`, `protoPayload.requestMetadata.callerIp`), not from billing. A GCP deployment therefore needs **two** connectors joined:
+
+| Source | Gives | Latency | Job |
+|---|---|---|---|
+| BigQuery billing export | project, service, SKU, cost | 4–24h | allocation, chargeback, reconciliation |
+| Cloud Audit Logs | principal, caller IP, method | near-real-time | **detection** |
+
+**Verify:** confirm Data Access audit logs are enabled for `aiplatform.googleapis.com` — they are **off by default**, which is itself worth telling every prospect. Then build the audit-log connector and join on project + time window.
+
+**Blast radius: high.** Without the audit-log connector, GCP detection is materially weaker than the case study implies. The billing connector shipped here is real and useful, but it is the allocation half, not the detection half.
+
+---
+
+## A12 🟡 Cloud services pulled forward into the AI wedge
+
+**Assumed:** Mahikshith's request to "try integrating GCP BigQuery, Cloud Run billing as well" is a request to broaden **coverage**, not to re-order the roadmap away from AI-first.
+
+**Why it cost almost nothing:** the billing export contains every GCP service in one table. One connector, one query, and BigQuery/Cloud Run/Compute/Storage arrive alongside Vertex. There was no version of this that covered only Vertex without deliberately discarding rows.
+
+Services are tagged `ai` / `data` / `compute` / `other` (`connectors/gcp.py: classify`) so reporting can lead with AI and expand to total cloud spend without re-deriving the split.
+
+**Blast radius:** low technically, real strategically. The risk is that the pitch drifts to "multi-cloud FinOps", which is CloudZero/Vantage/Finout's home ground and a fight we lose. **Coverage is broad; the story stays AI-first.**
+
+**Verify:** confirm AI remains the lead in customer conversations, and watch the Gate tracker signal "their pain is cloud cost, not AI cost."
+
+---
+
 ## A10 🟢 No GitHub remote created
 
 **Assumed:** the repo stays local until Mahikshith authorises a remote.

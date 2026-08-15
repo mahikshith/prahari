@@ -53,8 +53,13 @@ more code.
 ### Connectors
 - [x] Anthropic — Usage & Cost Admin API, hourly buckets, split cache-creation shapes
 - [x] OpenAI — org usage/costs, epoch timestamps, cached-token subtraction
+- [x] **GCP BigQuery billing export — all services in one connector.** Vertex AI, BigQuery, Cloud Run, Compute, Storage. Net-of-credits arithmetic, partition pruning, hourly buckets on usage time, INR-native currency, `ai`/`data`/`compute` classification, unit economics (TiB scanned, vCPU-hours)
 - [x] Price registry vendored from LiteLLM at pinned SHA `4ea5749` (2,427 models), sha256-verified
-- [x] Mocked tests for both (**not** exercised against live APIs — `ASSUMPTIONS.md` A8)
+- [x] Mocked tests for all three (**not** exercised against live APIs — `ASSUMPTIONS.md` A8)
+- [x] **Bug found & fixed:** `detection_key` fallback skipped `project_id`, so every GCP project would have collapsed into one org-wide baseline and a noisy project would mask an attack in a quiet one.
+
+### Repo
+- [x] `scripts/setup_remote.ps1` — one command to create the **private** GitHub repo and push. Needs an interactive browser login, so it's yours to run. It refuses to push if `.env` is tracked or if an existing repo is public.
 
 ### GTM
 - [x] `gtm/case-study-incident.md` — the cold open, with an honest synthetic-data banner
@@ -67,13 +72,14 @@ more code.
 
 **Ranked. The first two need Mahikshith; the rest don't.**
 
-1. **[BLOCKED — needs Mahikshith] Settle the IP/data-use position.** Everything touching employer data waits on this. `ASSUMPTIONS.md` A2. Cheapest item on the list, largest blast radius.
-2. **[BLOCKED — needs Mahikshith] GCP billing export access** for the incident window. Re-run the backtest on real data, delete the synthetic banner from the case study.
-3. **[READY] Start the 30 discovery calls.** This is the critical path — the gates decide whether any more code is worth writing. Nothing blocks it.
-4. **[READY] Reconciliation script** (`scripts/reconcile.py`) — computed total vs actual invoice, per provider. Needs an admin key to run, but can be written now.
-5. **[READY] GCP Vertex connector** — BigQuery billing export + Cloud Monitoring. The ₹6cr surface, and the one connector we most need.
-6. **[READY] Streamlit view over the backtest** — turns the terminal output into something demoable on a call.
-7. **[LATER] Enforcement dry-run engine.** Gate 5 decides whether this is the product or a nice-to-have.
+1. **[NEEDS YOU — 2 min] Run `scripts/setup_remote.ps1`** to create the private GitHub repo and push. Requires a browser login. If `gh` isn't installed yet: `winget install --id GitHub.cli`, then a new terminal.
+2. **[BLOCKED — needs Mahikshith] Settle the IP/data-use position.** Everything touching employer data waits on this. `ASSUMPTIONS.md` A2. Cheapest item on the list, largest blast radius.
+3. **[BLOCKED — needs Mahikshith] GCP billing export access** for the incident window. Re-run the backtest on real data, delete the synthetic banner from the case study.
+4. **[READY] Start the 30 discovery calls.** Still the critical path — the gates decide whether any more code is worth writing. Nothing blocks it.
+5. **[READY — now important] GCP Cloud Audit Logs connector.** `ASSUMPTIONS.md` A11: the billing export has **no caller identity**, so GCP detection is currently project-level only. `DORMANT_KEY_WAKE` and `NEW_GEO` — the two rules that fired hardest in the backtest — need `principalEmail` and `callerIp` from audit logs. This is the missing half of the incident story on GCP.
+6. **[READY] Reconciliation script** (`scripts/reconcile.py`) — computed total vs actual invoice, per provider. Needs an admin key to run, but can be written now.
+7. **[READY] Streamlit view over the backtest** — turns the terminal output into something demoable on a call.
+8. **[LATER] Enforcement dry-run engine.** Gate 5 decides whether this is the product or a nice-to-have.
 
 ---
 

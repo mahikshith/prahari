@@ -216,7 +216,13 @@ class UsageRecord(BaseModel):
         precisely the escalation we exist to catch. Model and region are observation
         attributes consumed by MODEL_ESCALATION and NEW_GEO instead.
 
-        Falls back to user then account when the provider exposes no key id — coarser,
-        but never silently absent.
+        Falls back through decreasing specificity when a provider exposes no key id.
+        `project_id` is in that chain deliberately: GCP's billing export carries no
+        caller identity at all, so the project is the finest grain available there.
+        Skipping it would collapse every project in an organisation into one baseline,
+        and a single noisy project would then mask an attack in a quiet one.
         """
-        return (self.provider.value, self.api_key_id or self.user_id or self.account_id)
+        return (
+            self.provider.value,
+            self.api_key_id or self.user_id or self.project_id or self.account_id,
+        )

@@ -4,7 +4,7 @@
 
 ## Product judgment
 
-The problem is real enough to investigate, but a unified token dashboard is already a crowded category. [Market research](MARKET_RESEARCH.md) documents substantial overlap from observability, FinOps and gateway vendors. The startup hypothesis is narrower: help a platform/security team identify suspicious AI spend, understand which identity and route evidence supports it, respond safely, and reconcile the eventual bill across providers.
+The problem is real enough to investigate, but a unified token dashboard is already a crowded category. [Market research](MARKET_RESEARCH.md) documents substantial overlap from observability, FinOps and gateway vendors. The startup hypothesis combines useful daily cost visibility by trusted person/team/account with identifying suspicious AI spend, explaining evidence/coverage, responding safely and reconciling the eventual bill. [USER_COST_VISIBILITY.md](USER_COST_VISIBILITY.md) clarifies the founder's ordinary-consumption use case and source limits; the product is not limited to service-account compromise.
 
 Start with one weekend abuse drill and one legitimate burst. A useful incident view shows what happened, what is known, what is missing, when each source arrived, who owns the affected resource, and which action actually took effect. Exact per-employee attribution requires trusted identity. A shared service account or API key alone cannot supply it. Compare Google's native anomaly/spend-cap workflow before writing a custom cloud control; reuse supported controls when they satisfy the customer scope.
 

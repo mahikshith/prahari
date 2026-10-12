@@ -38,6 +38,7 @@ Validation reports missing credentials when none are configured. Keep credential
 | [Decision log](docs/DECISIONS.md) | Stable dated decisions, rationale, tradeoffs and expected/actual outcomes |
 | [Current pilot plan](docs/PILOT_PLAN.md) | Repository assessment, phased work, acceptance evidence and failure paths |
 | [Feature priorities](docs/FEATURE_PRIORITIES.md) | Candid scope recommendations, network-security limits and expansion gates |
+| [User/account cost visibility](docs/USER_COST_VISIBILITY.md) | Hourly estimates, trusted identity and provider-billing limits |
 | [Context](CONTEXT.md) / [Progress](PROGRESS.md) | Current direction and implementation/validation status |
 | [Market research](docs/MARKET_RESEARCH.md) / [Decision gates](docs/DECISION_GATES.md) | Competitor evidence and pilot/renewal tests |
 | [Architecture](docs/ARCHITECTURE.md) / [Requirements](docs/REQUIREMENTS.md) | Evidence, accounting and deployment contracts |

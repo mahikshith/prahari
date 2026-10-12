@@ -2,11 +2,13 @@
 
 **Reviewed:** 2026-10-12. **Status:** recommendations for founder review; no feature implementation or change to the accepted pilot scope. Two specialist agents challenged the security and product assumptions. Actual buyer demand and incremental value remain unproven.
 
+**Founder clarification, 2026-10-12:** ordinary hourly cost/consumption per user and account across platforms is central alongside abuse detection. [USER_COST_VISIBILITY.md](USER_COST_VISIBILITY.md) records the source/identity limits and first pilot. The earlier incident-focused recommendation below must not exclude day-to-day FinOps value.
+
 ## Product judgment
 
 The current vision combines observability, FinOps, credential security, agent controls, optimization and compliance. That is too broad for a solo founder's first product. More modules increase integration and support obligations before the core promise has been proved.
 
-The strongest current hypothesis is a narrow operational workflow: find suspicious AI consumption, identify the accountable workload/team, explain the evidence and uncertainty, reach an operator, verify scoped containment, and reconcile the final cost. Customers must find that workflow materially better than their existing stack.
+The strongest current hypothesis is a focused operational workflow: understand ordinary AI consumption and budgets by trusted person/team/account, investigate suspicious changes, reach an accountable operator, verify scoped containment, and reconcile the final cost. Customers must find that workflow materially better than their existing stack.
 
 Request-cost dashboards and budget thresholds already overlap with [Datadog](https://docs.datadoghq.com/llm_observability/investigate/cost/), [Portkey](https://portkey.ai/docs/product/ai-gateway), [LiteLLM](https://docs.litellm.ai/docs/proxy/users) and [Google native caps](https://docs.cloud.google.com/billing/docs/how-to/budgets-spend-caps). Another dashboard is not, by itself, evidence of a defensible business. A reported large incident establishes one organization's pain, not a repeatable buyer or willingness to pay.
 
@@ -24,10 +26,11 @@ Useful narrow questions include: did a covered workload contact an unexpected AI
 
 ## What deserves priority
 
-These capabilities form one incident workflow, not five separate modules. Several elaborate the existing plan rather than increase provider scope.
+These capabilities share the same usage, identity, coverage and policy core. Several elaborate the existing plan rather than increase provider scope.
 
 | Priority | Capability | Why it earns its place | Acceptance evidence |
 |---|---|---|---|
+| First | Hourly cross-platform user/account cost | Give users and finance teams routine visibility into attributed usage, estimated spend and budgets, with freshness and unknown totals explicit. | Trusted identity joins two providers; missing identity remains unattributed, hourly estimates are distinguished from reconciled bills. See USER_COST_VISIBILITY.md. |
 | First | Protection coverage and drift | Show whether each known workload has fresh evidence, an owner and configured controls. Detect missing/lifted caps and changes that invalidate protection. This provides recurring operational value between incidents. | A controlled cap/config change or source outage becomes a specific coverage finding; unknown inventory remains unknown. |
 | First | Trusted ownership and credential posture | Route an incident to the accountable team/service. Use existing IAM inventory to surface long-lived keys, unsupported ownership and broad permissions; integrate existing exposure signals rather than invent a secret scanner. | Owner can be reached in a drill; evidence distinguishes principal, key, workload and employee. Shared credentials do not imply employee identity. |
 | First | One incident packet and confirmed response | Assemble identity, behavior, source delay, known/estimated cost, operator acknowledgement, proposed action and verified effect. Later append settled billing. An HTTP success from an action API is insufficient. | Operator can explain why the finding fired and what stopped; records show residual access/exposure and fewer manual investigation steps than the baseline. |

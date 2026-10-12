@@ -247,6 +247,22 @@ Status means **accepted** for a product choice, **implemented locally** for a co
 - **Expected outcome and acceptance:** a paid comparison establishes incremental operational value; weak results narrow the wedge or favor integration/services before additional modules.
 - **Actual outcome:** the candid scope/failure assessment is recorded. No buyer demand, pilot payment or renewal has been established by this recommendation.
 
+## D031 Keep hourly user/account FinOps visibility central alongside incidents
+
+**Date:** 2026-10-12. **Status:** accepted product direction; source acceptance pending.
+- **Decision and evidence:** the founder clarified ordinary per-user/per-account cross-platform token consumption and cost as a core requirement, without limiting identity to service accounts. [USER_COST_VISIBILITY.md](USER_COST_VISIBILITY.md) records the implementation contract and provider sources.
+- **Rationale and importance:** budgeting/allocation has routine value between incidents. The earlier security-focused feature recommendation must not crowd out the original FinOps objective; usefulness still does not establish uniqueness or paid demand.
+- **Expected outcome and acceptance:** a two-user GCP + OpenAI pilot shows attributed hourly estimates, model/token details, freshness, budgets and unattributed/unpriced amounts, then reconciles supported billing without double-counting.
+- **Actual outcome:** the requirement and pilot sequence are clarified in current planning. Existing raw user/key rollups do not establish cross-platform employee attribution or live hourly billing.
+
+## D032 Separate employee identity, usage estimates and reconciled billing
+
+**Date:** 2026-10-12. **Status:** recommended implementation contract.
+- **Decision and evidence:** namespace provider/account user IDs and map them to trusted customer identity; label dedicated-key ownership separately from authenticated application identity. Keep live/hourly estimates and provider/invoice charges as separate reconciled layers.
+- **Rationale and importance:** shared credentials obscure the employee, equal raw IDs can collide, and daily reports cannot prove exact hourly charges. Subscription fees and source delay cannot be repaired by inventing per-token prices or user mappings.
+- **Expected outcome and acceptance:** fixtures exercise shared keys, cross-account identity collisions, absent user data, unknown prices, source freshness and timezone boundaries; known user totals plus unattributed cost explain the known subtotal.
+- **Actual outcome:** the source/identity design is documented. No identity resolver, new employee-tool connector or live claim has been implemented or validated by this entry.
+
 ## Updating actual outcomes
 
 Append dated evidence under the relevant ID after final tests, live-source checks, invoice reconciliation or customer trials. Include the tested revision/window, command or artifact, result and material limits. Keep historical outcomes; add a new decision when the choice changes. Do not replace a pending live outcome with a passing mocked test.

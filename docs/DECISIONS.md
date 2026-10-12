@@ -5,7 +5,7 @@ This is the durable record of material product and engineering decisions. It exp
 **Recorded:** 2026-10-12. **Owner:** founder. **Branch:** codex/prahari-pilot-foundation.
 **Validation summary:** on 2026-10-12, 334 local tests passed in 12.44s; Ruff, dependency-lock and whitespace checks passed. Synthetic backtest smoke passed; registry SHA-256 remains pinned. Docker is unavailable. Local regression fixtures are not live-provider, invoice or production validation.
 
-Status means **accepted** for a product choice, **implemented locally** for a code change that passes local checks but awaits live acceptance, and **deferred** for work deliberately not enabled. Future changes must add a date and actual evidence rather than turn expected outcomes into claims.
+Status means **accepted** for a product choice, **implemented locally** for a code change that passes local checks but awaits live acceptance, **recommended** for a proposed priority awaiting founder review, and **deferred** for work deliberately not enabled. Future changes must add a date and actual evidence rather than turn expected outcomes into claims.
 
 ## D001 GCP and OpenAI are the first pilot providers
 
@@ -214,6 +214,38 @@ Status means **accepted** for a product choice, **implemented locally** for a co
 - **Rationale and importance:** preserve a concrete review checkpoint for a broad foundation repair, including migration and live-validation limits, before merging or deploying it.
 - **Expected outcome and acceptance:** the remote branch contains the tested code and durable decision record, and the PR is accessible for review.
 - **Actual outcome:** implementation/research commit `7665f432971e5b068c23d012e6c3b7487312699e` is pushed; [draft PR #1](https://github.com/mahikshith/prahari/pull/1) is open and attached to this chat. The 334-test suite covers that implementation; this publication entry is a documentation-only follow-up. No merge or deployment occurred.
+
+## D027 Keep network security narrowly scoped to incident evidence
+
+**Date:** 2026-10-12. **Status:** recommended; D015's accepted metadata plan remains in force.
+- **Decision and evidence:** use optional existing flow/DNS/NAT and native-policy evidence; postpone a general network-security product. [FEATURE_PRIORITIES.md](FEATURE_PRIORITIES.md) records the challenged assumptions and adoption gate.
+- **Rationale and importance:** the external direct-key attack can bypass the customer's VPC entirely. Broad packet/security tooling increases support and deployment burden without resolving missing provider identity or usage.
+- **Expected outcome and acceptance:** one-workload trial demonstrates additional decision-useful evidence; two design partners establish a recurring need before making the integration a standard feature. Sampling, cost and bypass remain visible.
+- **Actual outcome:** primary-source and specialist review is recorded. No network trial or new logging/control has been enabled; incremental value remains unproven.
+
+## D028 Prioritize protection drift, ownership and confirmed incident response
+
+**Date:** 2026-10-12. **Status:** recommended.
+- **Decision and evidence:** strengthen one operational workflow with fresh coverage/control-state evidence, trusted owners and a reconciled incident packet containing acknowledgement and confirmed response. Reuse existing gateway/on-call/native controls.
+- **Rationale and importance:** generic dashboards and budget thresholds already overlap with existing products. Changed protection state and an unresolved owner can matter even between rare incidents.
+- **Expected outcome and acceptance:** controlled protection changes and source outages surface actionable findings; operator drills demonstrate reduced investigation effort and verified effects versus the customer's baseline.
+- **Actual outcome:** priorities are proposed in FEATURE_PRIORITIES.md. No new feature or paid-buyer evidence establishes differentiation yet.
+
+## D029 Gate agent controls and optimization on trusted run/outcome telemetry
+
+**Date:** 2026-10-12. **Status:** recommended.
+- **Decision and evidence:** consider per-run call/retry/runtime/spend limits after routed telemetry is proved; add cost per successful task only with trusted customer success/quality evidence.
+- **Rationale and importance:** accidental loops can waste money, but agentless billing cannot establish run identity or task success. Token reduction and cheaper model routing alone do not establish a better business outcome.
+- **Expected outcome and acceptance:** bounded loop/retry/concurrency drills and quality-preserving task-cost comparisons justify expansion; unsupported identities and unknown outcomes remain explicit.
+- **Actual outcome:** candidate features and prerequisites are documented, without implementation or measured savings. Broad automatic optimization remains deferred.
+
+## D030 Validate one paid workflow before broadening the product
+
+**Date:** 2026-10-12. **Status:** recommended; D002's two-segment discovery remains accepted.
+- **Decision and evidence:** retain both customer groups in discovery but prioritize one buyer role and one incident workflow for first delivery. Compare against the existing customer stack and require paid commitment/renewal evidence.
+- **Rationale and importance:** provider access gaps, adequate incumbent tools, rare-incident economics and customer-specific installation work can invalidate the startup despite a large reported loss.
+- **Expected outcome and acceptance:** a paid comparison establishes incremental operational value; weak results narrow the wedge or favor integration/services before additional modules.
+- **Actual outcome:** the candid scope/failure assessment is recorded. No buyer demand, pilot payment or renewal has been established by this recommendation.
 
 ## Updating actual outcomes
 

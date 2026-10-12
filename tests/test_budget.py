@@ -194,7 +194,7 @@ class TestBudgetScope:
             Budget(id="b", name="x", amount=Decimal("1"), scope={"nonsense": "v"})
 
     def test_negative_amount_is_rejected(self):
-        with pytest.raises(ValueError, match="must be positive"):
+        with pytest.raises(ValueError, match="must be finite and positive"):
             Budget(id="b", name="x", amount=Decimal("-1"))
 
 
@@ -211,9 +211,7 @@ class TestBudgetEvaluation:
         outside = [rec(hour=JULY_IST_START - timedelta(hours=5), inr="99999")]
         budget = Budget(id="b", name="x", amount=Decimal("100000"))
 
-        state = evaluate(
-            budget, inside + outside, as_of=JULY_IST_START + timedelta(hours=10)
-        )
+        state = evaluate(budget, inside + outside, as_of=JULY_IST_START + timedelta(hours=10))
         assert state.spent == Decimal("10000.00")
         assert state.record_count == 10
 
@@ -284,9 +282,9 @@ class TestBudgetEvaluation:
             Budget(id="b", name="x", amount=Decimal("100000"), currency="INR"),
             usd,
             as_of=JULY_IST_START + timedelta(hours=3),
+            fx=FxTable([FxRate("USD", "INR", Decimal("85"), JULY_IST_START.date(), "test")]),
         )
-        # 300 USD at the July placeholder mark (84.30), not 300.
-        assert state.spent > Decimal("25000")
+        assert state.spent == Decimal("25500")
 
     def test_contributors_are_ranked(self):
         records = month_of_records(5, inr="100", project="small") + month_of_records(
@@ -392,9 +390,7 @@ class TestPreparedWindowIndex:
             as_of=JULY_IST_START,
             dimensions={"project_id"},
         )
-        budget = Budget(
-            id="b", name="x", amount=Decimal("1"), period=BudgetPeriod.DAILY
-        )
+        budget = Budget(id="b", name="x", amount=Decimal("1"), period=BudgetPeriod.DAILY)
         with pytest.raises(ValueError, match="prepared window is"):
             evaluate(budget, window=window)
 

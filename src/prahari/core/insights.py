@@ -142,9 +142,7 @@ def bottom_consumers(
     return sorted(rows, key=lambda r: r.cost)[:n]
 
 
-def per_user_consumption(
-    records: Iterable[UsageRecord], **kwargs
-) -> list[ConsumptionRow]:
+def per_user_consumption(records: Iterable[UsageRecord], **kwargs) -> list[ConsumptionRow]:
     """Token consumption and cost per user.
 
     Falls back to the credential when a provider reports no user - most API traffic
@@ -270,6 +268,10 @@ def ai_vs_cloud_split(
 
 
 def _convert(record: UsageRecord, currency: str, table: FxTable) -> Decimal:
+    if record.billed_cost is None:
+        raise ValueError(
+            f"cost unavailable for model {record.model!r}; monetary report is incomplete"
+        )
     if record.currency.upper() == currency.upper():
         return record.billed_cost
     on: date = record.fx_rate_date or record.period_start.date()

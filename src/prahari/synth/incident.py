@@ -67,8 +67,8 @@ class Scenario:
     stopped, because discovery is what ended it. Defaults to coincide with
     `attack_start_day + attack_days` for that reason.
 
-    The gap between attack onset and this day is the entire value proposition: every
-    rupee in it is exposure that sub-hour detection would have prevented."""
+    Spend after the first alert bucket is a counterfactual response opportunity.
+    The backtest executes no response and proves no avoided loss."""
 
     attack_hourly_usd: Decimal = Decimal("2917")
     """≈$70K/day — between Sysdig's Claude 2.x ($46K) and Opus (>$100K) figures."""

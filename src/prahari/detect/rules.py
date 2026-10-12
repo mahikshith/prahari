@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import statistics
 from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+
+from prahari.core.fx import FxError, FxTable
 
 # --- tunables -----------------------------------------------------------------
 # Defaults are starting points, to be calibrated against the backtest and real
@@ -62,6 +65,7 @@ class Rule(StrEnum):
     NEW_GEO = "NEW_GEO"
     MODEL_ESCALATION = "MODEL_ESCALATION"
     RESALE_PATTERN = "RESALE_PATTERN"
+    COST_UNAVAILABLE = "COST_UNAVAILABLE"
 
 
 class Severity(StrEnum):
@@ -88,10 +92,21 @@ class Observation:
     """Carried through to the alert. Previously hardcoded to USD in every rule, which
     labelled an Indian estate's rupee figures as dollars - an 84x misstatement in the
     one number the alert exists to convey."""
+    unpriced_records: int = 0
 
     def __post_init__(self) -> None:
         if self.hour.tzinfo is None:
             raise ValueError("Observation.hour must be timezone-aware (UTC)")
+        object.__setattr__(self, "hour", self.hour.astimezone(UTC))
+        object.__setattr__(self, "currency", self.currency.upper())
+
+    @property
+    def cost_complete(self) -> bool:
+        return self.unpriced_records == 0
+
+    @property
+    def has_activity(self) -> bool:
+        return self.spend > 0 or self.tokens > 0 or self.requests > 0
 
 
 @dataclass(slots=True)
@@ -101,34 +116,35 @@ class Baseline:
     detector that cries wolf weekly gets muted, which is the same as not existing."""
 
     detection_key: DetectionKey
-    hourly_spend: deque[Decimal] = field(
+    hourly_spend: deque[Decimal | None] = field(
         default_factory=lambda: deque(maxlen=BASELINE_WINDOW_HOURS)
     )
     """A deque with maxlen: the window evicts from the left on every append, and
     `list.pop(0)` is O(n) while `deque` eviction is O(1)."""
 
-    hour_of_week_spend: dict[int, deque[Decimal]] = field(default_factory=dict)
+    hour_of_week_spend: dict[int, deque[Decimal | None]] = field(default_factory=dict)
     last_seen: datetime | None = None
     known_countries: set[str] = field(default_factory=set)
     known_asns: set[str] = field(default_factory=set)
     known_models: set[str] = field(default_factory=set)
+    currency: str | None = None
 
     def observe(self, obs: Observation) -> None:
-        self.hourly_spend.append(obs.spend)  # deque(maxlen=...) evicts for us
+        if self.currency is not None and self.currency != obs.currency:
+            raise ValueError(f"currency changed for {self.detection_key}")
+        self.currency = obs.currency
+        spend = obs.spend if obs.cost_complete else None
+        self.hourly_spend.append(spend)
 
         how = _hour_of_week(obs.hour)
         slot = self.hour_of_week_spend.get(how)
         if slot is None:
             slot = deque(maxlen=SEASONAL_SAMPLES_PER_SLOT)
             self.hour_of_week_spend[how] = slot
-        slot.append(obs.spend)
+        slot.append(spend)
 
-        # `last_seen` tracks ACTIVITY, not observations. Zero-spend hours are fed in
-        # to keep the spend baseline honest (a credential idle at 3am should not have
-        # its norm computed from busy hours only), but they must not count as use -
-        # otherwise gap-filled quiet hours would keep `last_seen` fresh forever and
-        # DORMANT_KEY_WAKE could never fire.
-        if obs.spend > 0:
+        # Gap-filled hours have no activity; free or unpriced requests still count as use.
+        if obs.has_activity:
             self.last_seen = obs.hour
 
         if obs.country:
@@ -140,7 +156,11 @@ class Baseline:
 
     @property
     def sample_count(self) -> int:
-        return len(self.hourly_spend)
+        return sum(value is not None for value in self.hourly_spend)
+
+    @property
+    def cost_complete(self) -> bool:
+        return all(value is not None for value in self.hourly_spend)
 
     @property
     def is_established(self) -> bool:
@@ -152,14 +172,18 @@ class Baseline:
         if not self.hourly_spend:
             return Decimal(0)
 
-        seasonal = self.hour_of_week_spend.get(_hour_of_week(at), [])
-        series = seasonal if len(seasonal) >= 3 else self.hourly_spend
+        seasonal = [v for v in self.hour_of_week_spend.get(_hour_of_week(at), []) if v is not None]
+        known = [v for v in self.hourly_spend if v is not None]
+        series = seasonal if len(seasonal) >= 3 else known
+        if not series:
+            return Decimal(0)
         return Decimal(str(statistics.fmean(float(x) for x in series)))
 
     def spend_stdev(self) -> Decimal:
-        if len(self.hourly_spend) < 2:
+        known = [v for v in self.hourly_spend if v is not None]
+        if len(known) < 2:
             return Decimal(0)
-        return Decimal(str(statistics.stdev(float(x) for x in self.hourly_spend)))
+        return Decimal(str(statistics.stdev(float(x) for x in known)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,11 +200,11 @@ class Alert:
     severity: Severity
     detection_key: DetectionKey
     at: datetime
-    observed: Decimal
-    baseline: Decimal
+    observed: Decimal | None
+    baseline: Decimal | None
     multiple: Decimal | None
-    spend_so_far: Decimal
-    projected_24h: Decimal
+    spend_so_far: Decimal | None
+    projected_24h: Decimal | None
     currency: str
     evidence: dict[str, object]
     confidence: str = "high"
@@ -190,12 +214,21 @@ class Alert:
         return self.detection_key[1]
 
     def explain(self) -> str:
+        if self.rule is Rule.COST_UNAVAILABLE:
+            return (
+                f"[{self.rule}] key={self.credential} | {self.evidence['reason']} | "
+                "monetary anomaly rules abstained; cost and exposure are not asserted"
+            )
+        subtotal_label = (
+            "spent so far" if self.evidence.get("cumulative_cost_complete", True)
+            else "known spend subtotal; earlier usage remains unpriced"
+        )
         parts = [
             f"[{self.rule}] key={self.credential}",
             f"observed {self.observed} {self.currency}/hr",
             f"baseline {self.baseline} {self.currency}/hr"
             + (f" ({self.multiple}x)" if self.multiple is not None else ""),
-            f"spent so far {self.spend_so_far} {self.currency}",
+            f"{subtotal_label} {self.spend_so_far} {self.currency}",
             f"projected 24h exposure {self.projected_24h} {self.currency}",
         ]
         return " | ".join(parts)
@@ -212,15 +245,19 @@ def _project_24h(hourly: Decimal) -> Decimal:
 # --- rules --------------------------------------------------------------------
 
 
-def spend_spike(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | None:
+def spend_spike(
+    obs: Observation, bl: Baseline, spend_so_far: Decimal, minimum_absolute: Decimal | None = None
+) -> Alert | None:
     """Hourly spend far above the seasonally-adjusted norm for this credential.
 
     The workhorse rule: it catches both LLMjacking and runaway agent loops, which
     look nearly identical from the billing side.
     """
-    if not bl.is_established:
+    if not obs.cost_complete or not bl.cost_complete or not bl.is_established:
         return None
-    if obs.spend < SPEND_SPIKE_MIN_ABSOLUTE:
+    if minimum_absolute is None and obs.currency == "USD":
+        minimum_absolute = SPEND_SPIKE_MIN_ABSOLUTE
+    if minimum_absolute is None or obs.spend < minimum_absolute:
         return None
 
     expected = bl.expected_spend(obs.hour)
@@ -279,7 +316,7 @@ def dormant_key_wake(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> A
     time ago and only now monetised - exactly the incident pattern. It only works
     because the baseline is per-credential; a key in daily use can never go dormant.
     """
-    if bl.last_seen is None or obs.spend <= 0:
+    if not obs.cost_complete or bl.last_seen is None or not obs.has_activity:
         return None
 
     idle = obs.hour - bl.last_seen
@@ -305,14 +342,16 @@ def dormant_key_wake(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> A
     )
 
 
-def new_geo(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | None:
+def new_geo(
+    obs: Observation, bl: Baseline, spend_so_far: Decimal, minimum_absolute: Decimal | None = None
+) -> Alert | None:
     """Known credential, never-before-seen country or network.
 
     Requires the provider or cloud audit log to expose caller origin. Where it is
     unavailable the rule stays silent rather than guessing - a detector that
     fabricates evidence is worse than one that abstains. See ASSUMPTIONS.md A5.
     """
-    if not bl.is_established:
+    if not obs.cost_complete or not bl.is_established:
         return None
 
     novel: dict[str, object] = {}
@@ -323,10 +362,16 @@ def new_geo(obs: Observation, bl: Baseline, spend_so_far: Decimal) -> Alert | No
         novel["new_asn"] = obs.asn
     if not novel:
         return None
+    if minimum_absolute is None and obs.currency == "USD":
+        minimum_absolute = SPEND_SPIKE_MIN_ABSOLUTE
 
     return Alert(
         rule=Rule.NEW_GEO,
-        severity=Severity.CRITICAL if obs.spend >= SPEND_SPIKE_MIN_ABSOLUTE else Severity.WARNING,
+        severity=(
+            Severity.CRITICAL
+            if minimum_absolute is not None and obs.spend >= minimum_absolute
+            else Severity.WARNING
+        ),
         detection_key=obs.detection_key,
         at=obs.hour,
         observed=obs.spend,
@@ -350,7 +395,7 @@ def model_escalation(
     Only detectable because the baseline is per-credential rather than per-(key,model):
     partitioning by model would give the switch a fresh empty baseline instead.
     """
-    if not bl.is_established or not obs.model:
+    if not obs.cost_complete or not bl.is_established or not obs.model:
         return None
     if obs.model in bl.known_models or obs.model not in premium_models:
         return None
@@ -376,7 +421,9 @@ def resale_pattern(window: list[Observation], bl: Baseline, spend_so_far: Decima
     The signature of a reverse-proxy resale operation: continuous, uniform, maxed-out
     requests with none of the diurnal shape of human-driven work.
     """
-    if len(window) < RESALE_MIN_HOURS:
+    if len(window) < RESALE_MIN_HOURS or any(
+        not o.cost_complete for o in window[-RESALE_MIN_HOURS:]
+    ):
         return None
 
     qualifying = [
@@ -424,30 +471,86 @@ class Detector:
     against the baseline *before* folding the observation in, or a spike teaches the
     baseline that spikes are normal and the second hour of an attack looks fine."""
 
-    def __init__(self, premium_models: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        premium_models: set[str] | None = None,
+        *,
+        fx: FxTable | None = None,
+        last_activity: Mapping[DetectionKey, datetime] | None = None,
+    ) -> None:
         self._baselines: dict[DetectionKey, Baseline] = {}
         self._windows: dict[DetectionKey, list[Observation]] = {}
         self._cumulative: dict[DetectionKey, Decimal] = {}
         self._premium_models = premium_models or set()
+        self._fx = fx if fx is not None else FxTable([])
+        self._last_activity = dict(last_activity or {})
+        if any(at.tzinfo is None for at in self._last_activity.values()):
+            raise ValueError("last_activity timestamps must be timezone-aware")
+        self._unpriced_keys: set[DetectionKey] = set()
 
     def process(self, obs: Observation) -> list[Alert]:
         key = obs.detection_key
-        bl = self._baselines.setdefault(key, Baseline(detection_key=key))
+        bl = self._baselines.setdefault(
+            key, Baseline(detection_key=key, last_seen=self._last_activity.get(key))
+        )
+        if bl.currency is not None and bl.currency != obs.currency:
+            raise ValueError(f"currency changed for {key}: {bl.currency} to {obs.currency}")
         window = self._windows.setdefault(key, [])
 
         spend_so_far = self._cumulative.get(key, Decimal(0)) + obs.spend
 
-        alerts = [
-            a
-            for a in (
-                spend_spike(obs, bl, spend_so_far),
-                dormant_key_wake(obs, bl, spend_so_far),
-                new_geo(obs, bl, spend_so_far),
-                model_escalation(obs, bl, spend_so_far, self._premium_models),
-                resale_pattern([*window, obs], bl, spend_so_far),
-            )
-            if a is not None
-        ]
+        reason = None
+        minimum_absolute = None
+        if not obs.cost_complete:
+            self._unpriced_keys.add(key)
+            reason = f"price unavailable for {obs.unpriced_records} usage records"
+        elif not bl.cost_complete:
+            reason = "pricing gaps in baseline history prevent monetary anomaly comparisons"
+        else:
+            try:
+                minimum_absolute = self._fx.convert(
+                    SPEND_SPIKE_MIN_ABSOLUTE, "USD", obs.currency, obs.hour.date()
+                )
+            except FxError:
+                reason = f"no configured USD to {obs.currency} FX rate for spend thresholds"
+
+        alerts = []
+        if reason is None:
+            alerts = [
+                a
+                for a in (
+                    spend_spike(obs, bl, spend_so_far, minimum_absolute),
+                    dormant_key_wake(obs, bl, spend_so_far),
+                    new_geo(obs, bl, spend_so_far, minimum_absolute),
+                    model_escalation(obs, bl, spend_so_far, self._premium_models),
+                    resale_pattern([*window, obs], bl, spend_so_far),
+                )
+                if a is not None
+            ]
+        elif obs.has_activity or not obs.cost_complete:
+            alerts = [Alert(
+                rule=Rule.COST_UNAVAILABLE,
+                severity=Severity.WARNING,
+                detection_key=key,
+                at=obs.hour,
+                observed=None,
+                baseline=None,
+                multiple=None,
+                spend_so_far=None,
+                projected_24h=None,
+                currency=obs.currency,
+                evidence={
+                    "reason": reason,
+                    "unpriced_records": obs.unpriced_records,
+                    "tokens": obs.tokens,
+                    "requests": obs.requests,
+                },
+            )]
+        if key in self._unpriced_keys:
+            alerts = [
+                replace(a, evidence={**a.evidence, "cumulative_cost_complete": False})
+                for a in alerts
+            ]
 
         # Only now update state.
         bl.observe(obs)

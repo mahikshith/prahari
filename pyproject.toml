@@ -1,7 +1,7 @@
 [project]
 name = "prahari"
 version = "0.0.1"
-description = "AI spend control plane — cross-provider cost visibility with sub-hour credential-abuse detection"
+description = "AI spend observability prototype with coverage-aware anomaly detection"
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.9",

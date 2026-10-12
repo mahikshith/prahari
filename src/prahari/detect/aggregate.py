@@ -57,15 +57,20 @@ def observations_from_records(
 
 
 def _collapse(key: DetectionKey, hour: datetime, group: list[UsageRecord]) -> Observation:
-    spend = sum((r.billed_cost for r in group), Decimal(0))
+    if len({r.currency for r in group}) != 1:
+        raise ValueError(f"mixed currencies for {key} at {hour.isoformat()}")
+    spend = sum((r.billed_cost for r in group if r.billed_cost is not None), Decimal(0))
+    ranked = sorted(
+        group, key=lambda r: (r.billed_cost is not None, r.billed_cost or Decimal(0)), reverse=True
+    )
 
     # Attribute the hour to whatever drove most of the spend. An attacker's premium
     # model dominates cost even when it is a minority of requests, which is exactly
     # the attribution we want for MODEL_ESCALATION.
-    dominant = max(group, key=lambda r: r.billed_cost)
+    dominant = ranked[0]
 
     def ext(name: str):
-        for rec in sorted(group, key=lambda r: r.billed_cost, reverse=True):
+        for rec in ranked:
             if (value := rec.extensions.get(name)) is not None:
                 return value
         return None
@@ -80,6 +85,7 @@ def _collapse(key: DetectionKey, hour: datetime, group: list[UsageRecord]) -> Ob
         spend=spend,
         tokens=sum(r.tokens.total_tokens for r in group),
         requests=sum(r.tokens.requests for r in group),
+        unpriced_records=sum(r.billed_cost is None for r in group),
         region=dominant.region,
         country=ext("country"),
         asn=ext("asn"),
@@ -121,6 +127,7 @@ def _fill_zero_hours(observations: list[Observation]) -> list[Observation]:
                         spend=Decimal(0),
                         tokens=0,
                         requests=0,
+                        currency=series[0].currency,
                     )
                 )
 

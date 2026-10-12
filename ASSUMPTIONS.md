@@ -1,8 +1,10 @@
 # ASSUMPTIONS
 
+**Reviewed: 2026-10-12.** Earlier assumptions are retained for traceability, not treated as incident facts. [docs/DECISIONS.md](docs/DECISIONS.md) governs current choices; [PROGRESS.md](PROGRESS.md) governs verification. A6 and A10 are resolved below. Live-provider and employer-data acceptance remain open.
+
 Every assumption made in Mahikshith's absence, so none of them silently harden into fact.
 
-**Rules:** each entry states what was assumed, why, the blast radius if wrong, and how to verify. Nothing here is a decision — decisions live in `CONTEXT.md` and `CHANGELOG.md`. When one is confirmed or corrected, move it out and note it in `PROGRESS.md`.
+**Rules:** each entry states what was assumed, why, the blast radius if wrong, and how to verify. Accepted choices now live in docs/DECISIONS.md; CONTEXT.md and CHANGELOG.md summarize them. When one is confirmed or corrected, move it out and note it in `PROGRESS.md`.
 
 **Status key:** 🔴 blocks real data · 🟡 shapes work, cheap to change · 🟢 low risk
 
@@ -13,15 +15,14 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 **Assumed:** the GCP BigQuery billing export for the incident window cannot be accessed yet, so the Stage 0 backtest is built against a **synthetic dataset calibrated to published LLMjacking rates** rather than real billing records.
 
 **Calibration** (all from `docs/MARKET_RESEARCH.md` sources):
-- Sysdig: $46,080/day sustained on a hijacked Claude 2.x account; >$100,000/day on Claude 3 Opus
-- Documented Gemini key leak: $82,000 in ~48 hours against a ~$200/month baseline
-- Attack duration modelled at ~10 days × ~$70K/day ≈ $700K ≈ **₹5.9 crore at ₹84/USD** — which reconciles with the reported ₹6 crore
+- Sysdig's $46,080/day is a modeled worst-case quota/price calculation, not sustained measured victim loss.
+- Ten-day duration, roughly $70K/day and ₹84/USD are synthetic scenario inputs; they do not reconcile an actual invoice or prove the founder's reported ₹6–7 crore exposure.
 
-**Why:** the backtest is the artifact that opens all 30 discovery calls. Waiting for data access would idle the only unblocked path to a demo. The pipeline is identical either way; only the source table changes.
+**Why:** the backtest is the artifact that opens all 30 discovery calls. Waiting for data access would idle the only unblocked path to a demo. Real GCP sources expose different identity/usage fields and arrival delays; replacing the source table alone does not establish the same detection evidence.
 
 **Blast radius if wrong:** low for the code, moderate for the claim. Every number in the artifact must be labelled synthetic until real data replaces it. **Never show a synthetic figure to a prospect as if it were measured** — one such slip destroys the credibility the artifact exists to build.
 
-**Verify:** run `scripts/backtest_incident.py --source bigquery` once access exists. The detection output should be directionally similar; if it is wildly different, the rule thresholds are miscalibrated and that is a genuine finding.
+**Verify:** build a separately authorized real-source replay after proving field coverage and source delay. Do not assume a BigQuery-source CLI switch exists or that results should match the synthetic scenario.
 
 ---
 
@@ -55,7 +56,7 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 **Why:** this is the documented LLMjacking pattern (harvest → validate → resell via reverse proxy), and it is what CSA's "Operation Bizarre Bazaar" describes. It is also the shape that makes `DORMANT_KEY_WAKE` and `NEW_GEO` fire.
 
-**Blast radius:** if the real attack began immediately on leak, `DORMANT_KEY_WAKE` contributes nothing and `SPEND_SPIKE` carries the detection alone. Detection still works; the artifact is just less multi-signal.
+**Blast radius:** absent dormancy or caller-origin evidence can disable those rules. Whether remaining rules detect the real event depends on source coverage, freshness and calibration; it is not guaranteed.
 
 **Verify:** the real audit log will show first-use timing and caller origin.
 
@@ -65,7 +66,7 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 **Assumed:** `NEW_GEO` is implementable on GCP because Cloud Audit Logs record `callerIp` and `callerSuppliedUserAgent` for Vertex AI API calls.
 
-**Why:** standard for GCP admin/data-access audit logs. Without it, the highest-signal, lowest-noise rule is unavailable on our primary surface.
+**Why:** the audit schema supports origin fields, but specific methods/settings must be checked. callerIp can be internal/redacted; callerSuppliedUserAgent is caller-controlled. Relative signal/noise is not yet measured.
 
 **Blast radius:** moderate. If unavailable, `NEW_GEO` must abstain on GCP (the rule already does this correctly rather than guessing) and detection leans on spend and dormancy signals.
 
@@ -73,15 +74,13 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 ---
 
-## A6 🟡 FX rate ₹84 = $1 for INR presentation
+## A6 🟢 Resolved 2026-10-12 runtime FX placeholders removed
 
-**Assumed:** a flat ₹84/USD for converting published USD figures to INR in artifacts.
+**Prior assumption:** ₹84/USD was a synthetic presentation input, not a verified customer rate.
 
-**Why:** approximate mid-2026 rate; sufficient for an order-of-magnitude artifact.
+**Current outcome:** runtime FxTable defaults are empty and the daemon uses explicitly configured finite positive dated rates with provenance. Missing conversion remains a coverage/configuration gap; it does not invent money. Synthetic scenario rates remain labeled inputs only.
 
-**Blast radius:** cosmetic in the artifact, **not** in the product. `UsageRecord` already stores `currency` and `fx_rate_date` separately for exactly this reason — production must use RBI reference rates dated to the transaction, not a constant.
-
-**Verify:** wire the RBI reference rate feed before any customer-facing number.
+**Remaining acceptance:** verify the customer's chosen FX source/date and invoice treatment. See decision D008 and current PROGRESS.md for regression outcomes.
 
 ---
 
@@ -89,7 +88,7 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 **Assumed:** `SPEND_SPIKE_MULTIPLE = 3.2×`, `SPEND_SPIKE_MIN_ABSOLUTE = $50`, `DORMANCY_DAYS = 30`.
 
-**Why:** 3.2× is the widely-cited industry starting threshold; the $50 floor and 30-day dormancy are judgement calls to suppress noise.
+**Why:** all three are prototype judgment calls, not verified industry calibration. Validate false positives/misses on authorized partner workloads.
 
 **Blast radius:** low now, high at a customer. Every one is a false-positive/miss tradeoff we must own explicitly. A detector that cries wolf weekly gets muted, which is operationally identical to not existing.
 
@@ -113,7 +112,7 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 **Assumed:** Mahikshith's instruction that the platform must eventually cover all cloud cost (BigQuery, Cloud Run, GKE, storage) — not only AI — is a **roadmap** statement, not a re-scope of the current wedge. AI/LLM cross-provider stays the entry product.
 
-**Why:** stated explicitly — *"but first let's focus on llm or ai costs with cross platform for now."* Recorded in `CONTEXT.md` as the North Star with the architectural implications carried now (FOCUS 1.3 already covers all cloud services, so nothing needs re-modelling later).
+**Why:** stated explicitly — *"but first let's focus on llm or ai costs with cross platform for now."* Recorded in `CONTEXT.md` as the North Star with the architectural implications carried now (FOCUS terminology supports broader categories, but new sources, pricing and mappings may require model changes).
 
 **Blast radius:** low. The data model is already general enough. The risk is scope creep, not rework.
 
@@ -127,16 +126,16 @@ Every assumption made in Mahikshith's absence, so none of them silently harden i
 
 The BigQuery Cloud Billing export contains project, service, SKU, location and resource. It does **not** contain who made the call. There is no service account, no API key, no caller IP.
 
-**Consequence:** on GCP, the finest detection grain the billing export supports is the **project**. `DORMANT_KEY_WAKE` and `NEW_GEO` — the two rules that fired first and hardest in the backtest — cannot work from this source at all. And the export lags 4–24h, so it could not drive sub-hour detection even if it had identity.
+**Consequence:** on GCP, the finest detection grain the billing export supports is the **project**. `DORMANT_KEY_WAKE` and `NEW_GEO` — the two rules that fired first and hardest in the backtest — cannot work from this source at all. Export delivery has no latency guarantee, so billing alone cannot establish sub-hour detection.
 
 **What this means for the incident story:** the ₹6 crore detection narrative depends on credential-level signals. Those come from **Cloud Audit Logs** (`protoPayload.authenticationInfo.principalEmail`, `protoPayload.requestMetadata.callerIp`), not from billing. A GCP deployment therefore needs **two** connectors joined:
 
 | Source | Gives | Latency | Job |
 |---|---|---|---|
-| BigQuery billing export | project, service, SKU, cost | 4–24h | allocation, chargeback, reconciliation |
-| Cloud Audit Logs | principal, caller IP, method | near-real-time | **detection** |
+| BigQuery billing export | project, service, SKU, cost | no delivery/latency guarantee | provisional allocation and later reconciliation |
+| Cloud Audit Logs | available principal/key/origin/method fields | verify observed delay and method coverage | identity/detection evidence where available |
 
-**Verify:** confirm Data Access audit logs are enabled for `aiplatform.googleapis.com` — they are **off by default**, which is itself worth telling every prospect. Then build the audit-log connector and join on project + time window.
+**Verify:** confirm Data Access audit logs are enabled for `aiplatform.googleapis.com` — they are **off by default**, which is itself worth telling every prospect. Then implement supported audit/request correlation. Project/time matches alone do not prove exact per-key spend; retain uncertainty and unallocated amounts.
 
 **Blast radius: high.** Without the audit-log connector, GCP detection is materially weaker than the case study implies. The billing connector shipped here is real and useful, but it is the allocation half, not the detection half.
 
@@ -156,10 +155,10 @@ Services are tagged `ai` / `data` / `compute` / `other` (`connectors/gcp.py: cla
 
 ---
 
-## A10 🟢 No GitHub remote created
+## A10 🟢 Resolved 2026-10-12 GitHub remote exists
 
-**Assumed:** the repo stays local until Mahikshith runs the push himself.
+**Prior assumption:** the project would remain local until manual publication.
 
-**Why:** pushing publishes the incident narrative, the strategy and the competitive analysis — outward-facing, and his call. Separately, `gh auth login` opens a browser and binds his GitHub identity to this machine, which is not something to automate around.
+**Current outcome:** origin points to https://github.com/mahikshith/prahari.git and the working branch is codex/prahari-pilot-foundation. Historical setup-script/private-repo/browser-login notes are not current access facts. Publishing follows explicit human authorization and secret review.
 
-**Status:** `gh` 2.97.0 is installed at `C:\Program Files\GitHub CLI\gh.exe` and unauthenticated. `scripts/setup_remote.ps1` finds it there, creates the repo **private**, and refuses to run if `.env` is tracked or a pre-existing repo is public. One command and a browser login away.
+**Verify:** git remote -v and the current branch; use PROGRESS.md for actual publish/PR outcome. No account authentication or repository visibility is inferred from this entry.

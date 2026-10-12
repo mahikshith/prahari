@@ -26,10 +26,11 @@ plane concern, not a collector one.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from collections.abc import Iterable, Sequence
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -41,14 +42,16 @@ from prahari.core.models import (
     AllocationMethod,
     ChargeCategory,
     Completeness,
+    CostBasis,
     CostComponents,
     Provider,
     TokenCounts,
     UsageRecord,
 )
 from prahari.detect.rules import Alert, Rule, Severity
+from prahari.notify.router import Message
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _NATURAL_KEY = (
     "provider",
@@ -62,6 +65,8 @@ _NATURAL_KEY = (
     "region",
     "service_tier",
     "source",
+    "currency",
+    "charge_category",
 )
 
 DDL = """
@@ -98,7 +103,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
     batch_discount      DECIMAL(38,12) NOT NULL DEFAULT 0,
     tier_adjustment     DECIMAL(38,12) NOT NULL DEFAULT 0,
     other_cost          DECIMAL(38,12) NOT NULL DEFAULT 0,
-    billed_cost         DECIMAL(38,12) NOT NULL,
+    billed_cost         DECIMAL(38,12),
     list_cost           DECIMAL(38,12),
     currency            VARCHAR NOT NULL,
     fx_rate_date        DATE,
@@ -110,6 +115,7 @@ CREATE TABLE IF NOT EXISTS usage_records (
     allocation_method   VARCHAR NOT NULL,
     source              VARCHAR NOT NULL,
     completeness        VARCHAR NOT NULL,
+    cost_basis          VARCHAR NOT NULL DEFAULT 'provider_reported',
     extensions          JSON
 );
 
@@ -132,11 +138,11 @@ CREATE TABLE IF NOT EXISTS alerts (
     credential     VARCHAR NOT NULL,
     -- Not `at`: reserved word in DuckDB.
     occurred_at    TIMESTAMPTZ NOT NULL,
-    observed       DECIMAL(38,12) NOT NULL,
-    baseline       DECIMAL(38,12) NOT NULL,
+    observed       DECIMAL(38,12),
+    baseline       DECIMAL(38,12),
     multiple       DECIMAL(38,12),
-    spend_so_far   DECIMAL(38,12) NOT NULL,
-    projected_24h  DECIMAL(38,12) NOT NULL,
+    spend_so_far   DECIMAL(38,12),
+    projected_24h  DECIMAL(38,12),
     currency       VARCHAR NOT NULL,
     confidence     VARCHAR NOT NULL,
     evidence       JSON,
@@ -152,7 +158,22 @@ CREATE TABLE IF NOT EXISTS budget_thresholds (
     threshold     DECIMAL(10,4) NOT NULL,
     crossed_at    TIMESTAMPTZ NOT NULL,
     notified_at   TIMESTAMPTZ,
+    notification_id VARCHAR,
     PRIMARY KEY (budget_id, period_start, threshold)
+);
+
+CREATE TABLE IF NOT EXISTS notification_outbox (
+    event_id       VARCHAR NOT NULL,
+    kind           VARCHAR NOT NULL,
+    channel        VARCHAR NOT NULL,
+    title          VARCHAR NOT NULL,
+    body           VARCHAR NOT NULL,
+    severity       VARCHAR NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL,
+    delivered_at   TIMESTAMPTZ,
+    next_attempt   TIMESTAMPTZ NOT NULL,
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (event_id, channel)
 );
 """
 
@@ -175,6 +196,10 @@ def record_id(record: UsageRecord) -> str:
     not be.
     """
     parts = [str(getattr(record, field) or "") for field in _NATURAL_KEY]
+    parts.extend(
+        str(record.extensions.get(field) or "")
+        for field in ("invoice_month", "cost_type", "service", "project_name")
+    )
     parts.append(record.period_start.astimezone(UTC).isoformat())
     return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()[:32]
 
@@ -195,15 +220,70 @@ class Store:
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         self._con = duckdb.connect(self.path)
-        self._migrate()
+        try:
+            self._migrate()
+        except Exception:
+            self._con.close()
+            raise
 
     def _migrate(self) -> None:
         self._con.execute(DDL)
         current = self._con.execute("SELECT max(version) FROM schema_meta").fetchone()[0]
+        if current is not None and current > SCHEMA_VERSION:
+            raise ValueError(f"store schema {current} is newer than supported {SCHEMA_VERSION}")
         if current is None:
             self._con.execute(
                 "INSERT INTO schema_meta VALUES (?, ?)", [SCHEMA_VERSION, datetime.now(UTC)]
             )
+        elif current < SCHEMA_VERSION:
+            self._con.execute("BEGIN TRANSACTION")
+            try:
+                self._con.execute("DROP INDEX IF EXISTS idx_usage_period")
+                self._con.execute("DROP INDEX IF EXISTS idx_usage_key")
+                self._con.execute("DROP INDEX IF EXISTS idx_usage_project")
+                self._con.execute("DROP INDEX IF EXISTS idx_alerts_at")
+                self._con.execute(
+                    "ALTER TABLE usage_records ALTER COLUMN billed_cost DROP NOT NULL"
+                )
+                self._con.execute(
+                    "ALTER TABLE usage_records ADD COLUMN cost_basis "
+                    "VARCHAR DEFAULT 'provider_reported'"
+                )
+                self._con.execute(
+                    "UPDATE usage_records SET cost_basis = 'estimated' "
+                    "WHERE completeness = 'estimated' OR source IN "
+                    "('openai:/v1/organization/usage/completions', "
+                    "'anthropic:/v1/organizations/usage_report/messages')"
+                )
+                self._con.execute(
+                    "ALTER TABLE budget_thresholds ADD COLUMN notification_id VARCHAR"
+                )
+                for field in ("observed", "baseline", "spend_so_far", "projected_24h"):
+                    self._con.execute(f"ALTER TABLE alerts ALTER COLUMN {field} DROP NOT NULL")
+                records = self.records()
+                self._con.execute("DELETE FROM usage_records")
+                if records:
+                    self._con.register(
+                        "_migration",
+                        pd.DataFrame(
+                            [self._to_row(record) for record in records], columns=_COLUMNS
+                        ),
+                    )
+                    try:
+                        self._con.execute(
+                            "INSERT INTO usage_records BY NAME SELECT * FROM _migration"
+                        )
+                    finally:
+                        self._con.unregister("_migration")
+                self._con.execute(
+                    "INSERT INTO schema_meta VALUES (?, ?)", [SCHEMA_VERSION, datetime.now(UTC)]
+                )
+                self._con.execute("COMMIT")
+            except Exception:
+                with contextlib.suppress(duckdb.Error):
+                    self._con.execute("ROLLBACK")
+                raise
+            self._con.execute(DDL)
 
     def close(self) -> None:
         self._con.close()
@@ -241,6 +321,25 @@ class Store:
             self._con.execute("BEGIN TRANSACTION")
             self._con.execute(
                 "DELETE FROM usage_records WHERE record_id IN (SELECT record_id FROM _batch)"
+            )
+            legacy_match = " AND ".join(
+                f"old.{name} IS NOT DISTINCT FROM fresh.{name}"
+                for name in _NATURAL_KEY
+                if name != "charge_category"
+            )
+            # Replace legacy GCP aggregates when their invoice/type groups are re-fetched.
+            self._con.execute(
+                "DELETE FROM usage_records AS old WHERE old.provider = 'gcp_vertex' "
+                "AND json_extract_string(old.extensions,'$.invoice_month') IS NULL "
+                "AND json_extract_string(old.extensions,'$.cost_type') IS NULL "
+                "AND EXISTS (SELECT 1 FROM _batch AS fresh WHERE "
+                f"{legacy_match} AND old.period_start = fresh.period_start "
+                "AND json_extract_string(old.extensions,'$.service') IS NOT DISTINCT FROM "
+                "json_extract_string(fresh.extensions,'$.service') "
+                "AND json_extract_string(old.extensions,'$.project_name') IS NOT DISTINCT FROM "
+                "json_extract_string(fresh.extensions,'$.project_name') "
+                "AND (json_extract_string(fresh.extensions,'$.invoice_month') IS NOT NULL "
+                "OR json_extract_string(fresh.extensions,'$.cost_type') IS NOT NULL))"
             )
             self._con.execute("INSERT INTO usage_records BY NAME SELECT * FROM _batch")
             self._con.execute("COMMIT")
@@ -285,16 +384,17 @@ class Store:
         return [self._from_row(row) for row in cursor.fetchall()]
 
     def total_cost(self, start: datetime, end: datetime, currency: str = "INR") -> Decimal:
-        """Sum of billed cost in one currency. Rejects mixed currencies rather than
-        adding rupees to dollars - a silently wrong total is worse than an error."""
+        """Sum the requested native currency; unknown costs make its total incomplete."""
         row = self._con.execute(
             """
-            SELECT count(DISTINCT currency), sum(billed_cost)
+            SELECT count(*) FILTER (WHERE billed_cost IS NULL), sum(billed_cost)
             FROM usage_records
             WHERE period_start >= ? AND period_start < ? AND currency = ?
             """,
             [start, end, currency.upper()],
         ).fetchone()
+        if row[0]:
+            raise ValueError(f"cost unavailable for {row[0]} usage records; total is incomplete")
         return Decimal(str(row[1] or 0))
 
     def count(self) -> int:
@@ -366,14 +466,24 @@ class Store:
             [datetime.now(UTC), alert_id(alert)],
         )
 
-    def pending_alerts(self, limit: int = 100) -> list[dict[str, Any]]:
+    def pending_alerts(
+        self, limit: int = 100, *, unqueued_only: bool = False
+    ) -> list[dict[str, Any]]:
         """Alerts recorded but not yet delivered - the retry queue after an outage in
         Slack or SMTP."""
+        unqueued = (
+            "AND NOT EXISTS (SELECT 1 FROM notification_outbox WHERE event_id = alerts.alert_id)"
+            if unqueued_only
+            else ""
+        )
         cursor = self._con.execute(
-            """
+            f"""
             SELECT alert_id, rule, severity, provider, credential, occurred_at,
-                   observed, baseline, spend_so_far, projected_24h, currency, evidence
-            FROM alerts WHERE notified_at IS NULL ORDER BY occurred_at DESC LIMIT ?
+                   observed, baseline, multiple, spend_so_far, projected_24h, currency,
+                   confidence, evidence
+            FROM alerts WHERE notified_at IS NULL {unqueued}
+            ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END,
+                     occurred_at ASC LIMIT ?
             """,
             [limit],
         )
@@ -404,10 +514,154 @@ class Store:
         if already:
             return False
         self._con.execute(
-            "INSERT INTO budget_thresholds VALUES (?,?,?,?,?)",
+            "INSERT INTO budget_thresholds "
+            "(budget_id,period_start,threshold,crossed_at,notified_at) VALUES (?,?,?,?,?)",
             [budget_id, period_start, threshold, datetime.now(UTC), None],
         )
         return True
+
+    def unqueued_thresholds(self, budget_id: str, period_start: datetime) -> list[Decimal]:
+        rows = self._con.execute(
+            "SELECT threshold FROM budget_thresholds "
+            "WHERE budget_id = ? AND period_start = ? AND notification_id IS NULL",
+            [budget_id, period_start],
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def queue_notification(
+        self, event_id: str, kind: str, message: Message, channels: Sequence[str]
+    ) -> None:
+        if not channels:
+            return
+        now = datetime.now(UTC)
+        self._con.execute(
+            "INSERT OR IGNORE INTO notification_outbox "
+            "(event_id,kind,channel,title,body,severity,created_at,next_attempt) "
+            "SELECT ?,?,channel,?,?,?,?,? FROM unnest(?) AS targets(channel) "
+            "WHERE NOT EXISTS (SELECT 1 FROM notification_outbox WHERE event_id = ?)",
+            [
+                event_id,
+                kind,
+                message.title,
+                message.body,
+                str(message.severity),
+                now,
+                now,
+                list(channels),
+                event_id,
+            ],
+        )
+
+    def queue_budget(
+        self,
+        budget_id: str,
+        period_start: datetime,
+        thresholds: Sequence[Decimal],
+        message: Message,
+        channels: Sequence[str],
+    ) -> str:
+        raw = f"{budget_id}\x1f{period_start.isoformat()}\x1f{sorted(thresholds)}"
+        event_id = hashlib.sha256(raw.encode()).hexdigest()[:32]
+        self._con.execute("BEGIN TRANSACTION")
+        try:
+            self.queue_notification(event_id, "budget", message, channels)
+            for threshold in thresholds:
+                self._con.execute(
+                    "UPDATE budget_thresholds SET notification_id = ? "
+                    "WHERE budget_id = ? AND period_start = ? AND threshold = ?",
+                    [event_id, budget_id, period_start, threshold],
+                )
+            self._con.execute("COMMIT")
+        except Exception:
+            self._con.execute("ROLLBACK")
+            raise
+        return event_id
+
+    def pending_notifications(
+        self, now: datetime, limit: int = 100, *, channels: Sequence[str] | None = None
+    ) -> list[dict[str, Any]]:
+        if channels is not None and not channels:
+            return []
+        clause = ""
+        params: list[Any] = [now]
+        if channels is not None:
+            clause = f"AND channel IN ({','.join('?' for _ in channels)}) "
+            params.extend(channels)
+        params.append(limit)
+        cursor = self._con.execute(
+            "SELECT * FROM notification_outbox WHERE delivered_at IS NULL "
+            f"AND next_attempt <= ? {clause} ORDER BY "
+            "CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END, "
+            "created_at, event_id, channel LIMIT ?",
+            params,
+        )
+        names = [d[0] for d in cursor.description]
+        return [dict(zip(names, row, strict=True)) for row in cursor.fetchall()]
+
+    def record_delivery(self, event_id: str, channel: str, success: bool, now: datetime) -> None:
+        attempts = self._con.execute(
+            "SELECT attempts FROM notification_outbox WHERE event_id = ? AND channel = ?",
+            [event_id, channel],
+        ).fetchone()[0]
+        next_attempt = now + timedelta(seconds=min(300, 15 * 2 ** min(attempts, 5)))
+        self._con.execute(
+            "UPDATE notification_outbox SET delivered_at = ?, next_attempt = ?, "
+            "attempts = attempts+1 "
+            "WHERE event_id = ? AND channel = ?",
+            [now if success else None, next_attempt, event_id, channel],
+        )
+
+    def next_notification_due(self, channels: Sequence[str]) -> datetime | None:
+        if not channels:
+            return None
+        row = self._con.execute(
+            "SELECT min(next_attempt) FROM notification_outbox WHERE delivered_at IS NULL "
+            f"AND channel IN ({','.join('?' for _ in channels)})",
+            list(channels),
+        ).fetchone()
+        return _as_utc(row[0]) if row[0] else None
+
+    def notification_complete(self, event_id: str) -> bool:
+        rows = self._con.execute(
+            "SELECT channel,delivered_at FROM notification_outbox WHERE event_id = ?",
+            [event_id],
+        ).fetchall()
+        required = [row for row in rows if row[0] != "console"] or rows
+        return bool(required) and all(delivered_at is not None for _, delivered_at in required)
+
+    def acknowledge_notification(self, event_id: str, kind: str) -> None:
+        now = datetime.now(UTC)
+        if kind == "alert":
+            self._con.execute(
+                "UPDATE alerts SET notified_at = ? WHERE alert_id = ?", [now, event_id]
+            )
+        else:
+            self._con.execute(
+                "UPDATE budget_thresholds SET notified_at = ? WHERE notification_id = ?",
+                [now, event_id],
+            )
+
+    def unacknowledged_notifications(self) -> list[tuple[str, str]]:
+        return self._con.execute(
+            "SELECT DISTINCT event_id, kind FROM notification_outbox "
+            "WHERE event_id IN (SELECT alert_id FROM alerts WHERE notified_at IS NULL) "
+            "OR event_id IN (SELECT notification_id FROM budget_thresholds "
+            "WHERE notified_at IS NULL)"
+        ).fetchall()
+
+    def last_activity_before(self, at: datetime) -> dict[tuple[str, str], datetime]:
+        rows = self._con.execute(
+            "SELECT provider, coalesce(nullif(api_key_id,''),nullif(user_id,''),"
+            "nullif(project_id,''),account_id), max(period_start) "
+            "FROM usage_records WHERE period_start < ? "
+            "AND (billed_cost > 0 OR requests > 0 OR input_tokens > 0 OR output_tokens > 0 "
+            "OR cache_read_tokens > 0 OR cache_write_tokens > 0 OR reasoning_tokens > 0) "
+            "GROUP BY 1,2",
+            [at],
+        ).fetchall()
+        return {
+            (provider, credential): _as_utc(last_seen) for provider, credential, last_seen in rows
+        }
 
     # --- row mapping ----------------------------------------------------------
 
@@ -453,6 +707,7 @@ class Store:
             r.allocation_method.value,
             r.source,
             r.completeness.value,
+            r.cost_basis.value,
             json.dumps(r.extensions, default=str),
         ]
 
@@ -489,7 +744,8 @@ class Store:
                 tier_adjustment=_dec(d["tier_adjustment"]),
                 other=_dec(d["other_cost"]),
             ),
-            billed_cost=_dec(d["billed_cost"]),
+            billed_cost=_dec(d["billed_cost"]) if d["billed_cost"] is not None else None,
+            cost_basis=CostBasis(d["cost_basis"]),
             list_cost=_dec(d["list_cost"]) if d["list_cost"] is not None else None,
             currency=d["currency"],
             fx_rate_date=_as_date(d["fx_rate_date"]),
@@ -512,13 +768,14 @@ def alert_from_row(row: dict[str, Any]) -> Alert:
         severity=Severity(row["severity"]),
         detection_key=(row["provider"], row["credential"]),
         at=_as_utc(row["occurred_at"]),
-        observed=_dec(row["observed"]),
-        baseline=_dec(row["baseline"]),
-        multiple=None,
-        spend_so_far=_dec(row["spend_so_far"]),
-        projected_24h=_dec(row["projected_24h"]),
+        observed=_dec(row["observed"]) if row["observed"] is not None else None,
+        baseline=_dec(row["baseline"]) if row["baseline"] is not None else None,
+        multiple=_dec(row["multiple"]) if row.get("multiple") is not None else None,
+        spend_so_far=_dec(row["spend_so_far"]) if row["spend_so_far"] is not None else None,
+        projected_24h=_dec(row["projected_24h"]) if row["projected_24h"] is not None else None,
         currency=row["currency"],
         evidence=json.loads(row["evidence"]) if row.get("evidence") else {},
+        confidence=row.get("confidence", "high"),
     )
 
 

@@ -1,61 +1,52 @@
 # Prahari
 
-**प्रहरी — sentinel.** An AI spend control plane.
+Prahari (प्रहरी, sentinel) is an AI spend observability and control prototype. It aims to join cost, trusted identity, coverage gaps and incident response across providers.
 
-> See every rupee of AI spend across every provider — and stop it within the hour when it goes wrong.
+The founder reports a weekend service-account exposure followed by unauthorized Gemini use and roughly ₹6–7 crore of cost/exposure. The [incident story](gtm/case-study-incident.md) separates that report from synthetic detection scenarios. Simulated exposure is not measured money saved.
 
----
+## Current scope and status
 
-## The problem
+The first pilot targets **GCP + OpenAI**, for startup/midmarket and regulated enterprise buyers using one shared core. Deployment starts in the customer's India cloud; India-hosted SaaS follows later.
 
-A single leaked GCP service account key cost one company **~₹6 crore**. It's not an anomaly — it's a category called **LLMjacking**, and AI-targeted credential theft rose **376%** between Q4 2025 and Q1 2026. Sysdig has documented hijacked accounts burning **$46K–$100K per day**.
+The repository contains a Python/DuckDB collector, OpenAI/Anthropic usage connectors, GCP billing ingestion, explainable detection, budget analysis, notifications and synthetic replays. The existing Anthropic connector remains, but it does not expand the selected pilot scope.
 
-Meanwhile 98% of FinOps teams now manage AI spend, 73% of AI projects blow their budget, and the tools they use report on a **daily** cadence — structurally incapable of catching an attack that drains six figures in a day.
+The hybrid design combines agentless audit/billing evidence with an optional reused gateway for routed telemetry and budget admission. GCP audit correlation, live gateway blocking, provider response actions and network collection are planned. No live controls or cloud logging are enabled by this change.
 
-Cost tools see the bill but not the identity. Security tools see the credential but never the money. Prahari closes that loop.
+Financial records distinguish provider-reported cost, estimates and unknown prices. Missing cost remains unknown; incomplete money cannot justify monetary enforcement. GCP billing is provisional and lacks caller identity. Shared credentials cannot establish employee attribution without additional trusted evidence.
 
-## What it does
+**Validation:** 334 local tests pass, with Ruff and dependency-lock checks passing. Live provider, customer deployment and invoice acceptance are pending. See [PROGRESS.md](PROGRESS.md). India hosting and endpoint/IP evidence do not establish legal compliance or physical inference geography.
 
-**Visibility** — agentless, cross-provider. Anthropic, OpenAI, GCP Vertex, AWS Bedrock, Azure OpenAI, GitHub Copilot, M365 Copilot, plus shadow AI from SSO and card feeds. Normalised to FOCUS 1.3, allocated to teams and cost centres, reconciled against the actual invoice in INR with GST.
+## Start locally
 
-**Detection** — rolling per-key, per-identity baselines with sub-hour resolution. Five named, explainable rules matching the LLMjacking fingerprint. Target: median detection under 60 minutes, against a 24-hour billing-export baseline.
-
-**Enforcement** — budget hard-stops and automated key revocation. Opt-in, dry-run first, fully audit-logged.
-
-## How it's different
-
-- **Agentless.** No SDK, no proxy in the request path. Gateways and tracing tools only see traffic developers deliberately route through them — they are blind to a stolen credential calling a provider directly. That blindness is the whole gap.
-- **Self-hosted collector.** Runs in your VPC. Your admin credentials never cross our boundary; only aggregated cost records do.
-- **Explainable.** Every alert states the rule, the baseline, the observation, and the projected 24-hour exposure in rupees. No black boxes in front of a CFO.
-
-## Status
-
-**Pre-product.** Currently building the backtest against a real incident, and running buyer discovery against explicit go/no-go gates. See [PROGRESS.md](PROGRESS.md).
-
-## Docs
-
-| | |
-|---|---|
-| [CONTEXT.md](CONTEXT.md) | Why this exists, decisions made, the load-bearing assumption |
-| [PROGRESS.md](PROGRESS.md) | Current state, next actions, blockers |
-| [docs/MARKET_RESEARCH.md](docs/MARKET_RESEARCH.md) | Market, competitors, gaps, investor appetite, India reality |
-| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Functional and non-functional requirements |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Deployment shape, pipeline, data model |
-| [docs/TECH_STACK.md](docs/TECH_STACK.md) | Stack choices and rationale |
-| [docs/OSS_INVENTORY.md](docs/OSS_INVENTORY.md) | What we reuse instead of building, with licence audit |
-| **[docs/MVP_ROADMAP.md](docs/MVP_ROADMAP.md)** | **What's left to build, in order, with dependencies** |
-| [docs/PROJECT_PLAN.md](docs/PROJECT_PLAN.md) | Staging philosophy and standing risks |
-| [docs/DECISION_GATES.md](docs/DECISION_GATES.md) | The five gates that decide whether this gets built |
-| [docs/SECURITY_REVIEW.md](docs/SECURITY_REVIEW.md) | Security findings and fixes; latency work |
-
-## Setup
+Use Python 3.12+ and uv:
 
 ```powershell
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-uv python install 3.12
-uv sync
+uv sync --extra dev
+uv run prahari validate -c prahari.example.yaml
+uv run prahari status -c prahari.example.yaml
+uv run python -m pytest -q
+uv run ruff check src tests scripts
+uv run python scripts/backtest_incident.py
 ```
 
----
+Validation reports missing credentials when none are configured. Keep credentials outside Git and use your own authorized sandbox for live checks. Cross-currency operation requires explicit FX rates with date/source; synthetic examples supply their own rates.
 
-*Prahari is a working codename.*
+## Project records
+
+| Document | Purpose |
+|---|---|
+| [Decision log](docs/DECISIONS.md) | Stable dated decisions, rationale, tradeoffs and expected/actual outcomes |
+| [Current pilot plan](docs/PILOT_PLAN.md) | Repository assessment, phased work, acceptance evidence and failure paths |
+| [Feature priorities](docs/FEATURE_PRIORITIES.md) | Candid scope recommendations, network-security limits and expansion gates |
+| [User/account cost visibility](docs/USER_COST_VISIBILITY.md) | Hourly estimates, trusted identity and provider-billing limits |
+| [Context](CONTEXT.md) / [Progress](PROGRESS.md) | Current direction and implementation/validation status |
+| [Market research](docs/MARKET_RESEARCH.md) / [Decision gates](docs/DECISION_GATES.md) | Competitor evidence and pilot/renewal tests |
+| [Architecture](docs/ARCHITECTURE.md) / [Requirements](docs/REQUIREMENTS.md) | Evidence, accounting and deployment contracts |
+| [MVP roadmap](docs/MVP_ROADMAP.md) / [Project plan](docs/PROJECT_PLAN.md) | Historical work breakdowns and standing risks |
+| [Network telemetry](docs/NETWORK_TELEMETRY.md) | IP/DNS/flow evidence and coverage limits |
+| [Tech stack](docs/TECH_STACK.md) / [OSS inventory](docs/OSS_INVENTORY.md) | Reuse choices, licenses and deployment dependencies |
+| [Critical OSS assessment](docs/OSS_ASSESSMENT.md) | Verified editions, documented limits, selected upstream issues and conformance trials |
+| [India regulation](docs/INDIA_REGULATION.md) | Commencement, sector applicability, residency and data-flow evidence |
+| [Security review](docs/SECURITY_REVIEW.md) / [Changelog](CHANGELOG.md) | Findings and development history |
+
+Prahari remains a working codename.

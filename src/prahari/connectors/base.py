@@ -13,7 +13,6 @@ Every connector must be:
 
 from __future__ import annotations
 
-import contextlib
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -37,11 +36,10 @@ class ProviderHTTPError(RuntimeError):
     request path, and nothing else.
     """
 
-    def __init__(self, status_code: int, path: str, detail: str = "") -> None:
+    def __init__(self, status_code: int, path: str) -> None:
         self.status_code = status_code
         self.path = path
-        suffix = f": {detail}" if detail else ""
-        super().__init__(f"provider returned {status_code} for {path}{suffix}")
+        super().__init__(f"provider returned {status_code} for {path}")
 
 
 def raise_for_status_safely(response: httpx.Response, path: str) -> None:
@@ -49,13 +47,8 @@ def raise_for_status_safely(response: httpx.Response, path: str) -> None:
     if response.is_success:
         return
 
-    # The body may carry a useful provider message, but could also echo input. Cap it,
-    # and never let error handling itself raise.
-    detail = ""
-    with contextlib.suppress(Exception):
-        detail = response.text[:200]
-
-    raise ProviderHTTPError(response.status_code, path, detail) from None
+    # Provider error bodies can echo credentials or customer content.
+    raise ProviderHTTPError(response.status_code, path) from None
 
 
 @dataclass(frozen=True, slots=True)

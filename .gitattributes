@@ -1,0 +1,2 @@
+# Preserve the exact bytes checked by the pricing registry checksum.
+src/prahari/pricing/vendor/model_prices.json -text

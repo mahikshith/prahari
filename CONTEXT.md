@@ -1,56 +1,27 @@
-# CONTEXT
+# Prahari product context
 
-*Why this project exists and what we've decided. Update when a decision changes, not when work progresses — that's `PROGRESS.md`.*
+## Origin
 
-## The origin
+The founder reports that exposed service-account access was used to consume Gemini tokens during a weekend, causing roughly ₹6–7 crore of cost/exposure. The exact invoice, recovery, timing and permission to use employer records are unresolved. The repository's attack/control replay is synthetic and does not measure prevented loss.
 
-A GCP service account key leaked into an LLM chat at Mahikshith's company. It was used from outside the organisation. The unbudgeted cost is roughly **₹6 crore (~$700K)** from that single credential.
+## Current direction
 
-The wider problem it exposed: AI spend is scattered across Claude Code (developers), Copilot Studio + M365 Copilot (management), Gemini (some teams), and GCP/Vertex service accounts (robotics/AI APIs). Nobody could say who was spending what, on which provider, until an invoice arrived.
+The long-term aim is unified AI/cloud spend visibility and control. The current entry point is **GCP + OpenAI**: understandable spend, trusted identity where available, coverage gaps, alerts and eventually scoped containment.
 
-## What the research established
+A solo founder with AI assistance will serve startup/midmarket and regulated enterprise buyers through one shared core. Customer-owned India cloud deployment precedes India-hosted SaaS. Enterprise evidence is supported incrementally; certifications are not promised.
 
-Full memo: [docs/MARKET_RESEARCH.md](docs/MARKET_RESEARCH.md). The three findings that shape everything:
+The accepted hybrid design uses agentless audit/billing records plus an optional reused gateway for routed usage and budget admission. This supersedes the older absolute gateway/SDK ban. Neither path establishes full coverage: stolen underlying keys can bypass a gateway, and billing records can lack caller identity or arrive late.
 
-1. **The problem is validated at the top of the FinOps profession.** 98% of practitioners now manage AI spend (31% in 2024); granular AI spend monitoring is the #1 most-requested capability in the 2026 State of FinOps survey; 73% of AI projects blow budget.
-2. **The generic product is already shipped six times over.** Torii (May 2026), Flexera (June 2026), Finout, Vantage, Amnic, Mavvrik. And every independent pure-play in the adjacent category was acquired within eight months: Langfuse→ClickHouse, Helicone→Mintlify, Humanloop→Anthropic, Portkey→Palo Alto ($140M). **A cross-provider AI cost dashboard is a feature, not a company.**
-3. **Nobody owns what actually cost ₹6 crore.** FinOps tools see the bill but not the identity. Security tools see the credential but never the money. The loop from *leaked credential → anomalous spend → containment → rupee impact* is unclaimed.
+Python/DuckDB remains the foundation. PostgreSQL and a production frontend follow an actual deployment need. Additional clouds, seat/shadow-AI discovery and broad model optimization are deferred.
 
-The incident is not bad luck — it's a named category, **LLMjacking**. Sysdig documented $46K/day on a hijacked Claude 2.x account and >$100K/day on Opus, and a **376% rise** in AI-targeted credential theft between Q4 2025 and Q1 2026.
+## Product hypothesis and evidence
 
-## Product scope: North Star vs wedge
+Existing vendors already provide cross-provider observability, attribution, budgets and residency controls. Prahari must demonstrate a useful difference in the joined identity/spend/containment workflow against the buyer's current tools. [Market research](docs/MARKET_RESEARCH.md) records the verified overlap.
 
-**North Star — a unified cost platform.** Not only LLM/AI spend: BigQuery, Cloud Run, GKE, storage, egress, the whole bill. One platform, every provider, every cost line, allocated to teams.
+India-first follows founder access and customer deployment requirements. It does not depend on a blanket DPDP localization mandate. Regional endpoints, private connectivity and IP geolocation are different from provider processing commitments.
 
-**Wedge — AI/LLM cross-provider, first.** Everything shipped now targets AI spend across Anthropic, OpenAI, Vertex, Bedrock, Azure OpenAI and the seat-based tools.
+Buyer interviews, paid pilots, source/invoice checks and renewals determine the next investment. Hypothetical ACVs and synthetic exposure numbers are not traction.
 
-**Why this direction and not the reverse.** Every incumbent came from cloud and is bolting AI on — CloudZero, Vantage, Finout, Flexera, Amnic. Entering from AI and expanding into cloud is the opposite path, and it's the better one:
+## Durable records
 
-1. AI is where the pain is acute and unsolved *right now* — the #1 requested FinOps capability, arriving before the tooling.
-2. **The security differentiator only exists on the AI side.** Nobody is hijacking a Cloud Run service to resell it; they hijack inference credentials because there's a black market for tokens. Our moat cannot be built from the cloud side.
-3. Once we hold a customer's AI cost data and their trust, cloud is an **expansion sale** into an account we already own. Going the other way means displacing an entrenched FinOps vendor on their home ground — a fight we'd lose.
-
-**Architecturally this costs us nothing today.** FOCUS 1.3 already normalises all cloud services, not just AI, and `UsageRecord` is modelled against it. When cloud comes, it's new connectors against an existing schema — not a re-model. The discipline to hold is scope, not design: see `ASSUMPTIONS.md` A9.
-
-## Decisions made
-
-| Decision | Rationale |
-|---|---|
-| **Both visibility and enforcement** — visibility is the entry product, enforcement is the moat | Not a choice between them: you can't build the second without the first. Ship in that order, pitch both |
-| **India-domestic first** | GCCs are now independent buying centres (2,100+ centres, 2.3M people); India adopts AI faster (40% vs 28% at significant/full usage); DPDP deadline May 2027 gives an Indian vendor a *legal* preference over Torii/Flexera |
-| **Agentless, never a gateway or SDK** | A stolen credential calling a provider directly is invisible to both. That blindness is our differentiator — adopting their architecture would inherit it |
-| **Self-hosted collector; we never hold customer credentials** | We'd otherwise be the highest-value target in the category. Also the DPDP story, also the enterprise objection-killer |
-| **Backtest before product** | Research says distribution and trust decide this market, not features |
-| **Codename Prahari** (प्रहरी, sentinel) | Provisional. Renaming is cheap now, expensive after the first customer |
-
-## The load-bearing assumption
-
-India-domestic-first rests entirely on **DPDP/data-residency giving us a structural reason to be preferred over Torii and Flexera.** That is Gate 3 in [docs/DECISION_GATES.md](docs/DECISION_GATES.md).
-
-If residency does not come up **unprompted** in discovery calls, India-domestic-first collapses into "a cheaper version of a crowded market" — and the geography must change, not the product. Watch this one.
-
-## Open questions
-
-- **IP / data-use position** if the incident data and early customers come from the current employer. Needs sorting before we touch employer billing data. Not a blocker, cheaper now than later.
-- **Name.** Prahari is a working codename, not a decision.
-- **Whether GCC budget independence is real or theatre** — Gate 4 tests it.
+[docs/DECISIONS.md](docs/DECISIONS.md) is the authoritative dated decision log with rationale, importance, tradeoffs, acceptance and actual outcomes. [PROGRESS.md](PROGRESS.md) records implementation and verification status. [docs/NETWORK_TELEMETRY.md](docs/NETWORK_TELEMETRY.md) explains what traffic metadata can and cannot establish.

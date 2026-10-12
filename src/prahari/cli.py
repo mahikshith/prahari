@@ -22,7 +22,7 @@ from pathlib import Path
 
 from prahari.collector.daemon import Daemon, build_connector, run_daemon
 from prahari.core import config as config_module
-from prahari.core.fx import format_inr
+from prahari.core.fx import format_money
 from prahari.notify.router import Router
 from prahari.store.duck import Store
 
@@ -52,7 +52,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
     print(f"         budgets        {len(cfg.budgets)}")
     for budget in cfg.budgets:
         scope = ", ".join(f"{k}={v}" for k, v in budget.scope.items()) or "organisation-wide"
-        print(f"             {budget.id:<24} {format_inr(budget.amount):>16}  [{scope}]")
+        amount = format_money(budget.amount, budget.currency)
+        print(f"             {budget.id:<24} {amount:>16}  [{scope}]")
 
     if missing := cfg.missing_env():
         print("\nMISSING environment variables:")

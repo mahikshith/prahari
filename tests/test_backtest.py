@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from backtest_incident import run
+from backtest_incident import report, run
 
 from prahari.core.models import (
     CostComponents,
@@ -120,9 +120,9 @@ class TestBacktest:
     def test_detects_the_attack(self):
         assert self.result.first_alert is not None
 
-    def test_detects_within_the_first_hour(self):
-        assert self.result.detection_latency_hours is not None
-        assert self.result.detection_latency_hours <= 1.0
+    def test_first_alert_bucket_is_within_the_first_hour(self):
+        assert self.result.first_alert_bucket_offset_hours is not None
+        assert self.result.first_alert_bucket_offset_hours <= 1.0
 
     def test_total_reconciles_with_the_reported_incident(self):
         """~Rs 6 crore. If the synthetic scenario drifts from the real incident's
@@ -131,9 +131,14 @@ class TestBacktest:
         crore = inr / Decimal("10000000")
         assert Decimal("5") < crore < Decimal("7")
 
-    def test_prevents_the_overwhelming_majority_of_exposure(self):
-        ratio = self.result.exposure_prevented / self.result.total_spend_at_invoice
+    def test_later_buckets_contain_most_synthetic_spend(self):
+        assert self.result.spend_after_first_alert is not None
+        ratio = self.result.spend_after_first_alert / self.result.total_spend_at_invoice
         assert ratio > Decimal("0.99")
+        assert (
+            self.result.spend_at_first_alert + self.result.spend_after_first_alert
+            == self.result.total_spend_at_invoice
+        )
 
     def test_all_five_signals_corroborate(self):
         fired = {a.rule for a in self.result.attack_alerts}
@@ -169,3 +174,32 @@ class TestBacktest:
         """Guards ASSUMPTIONS.md A1 — a modelled number must never leave this repo
         looking measured."""
         assert "SYNTHETIC" in self.result.as_dict()["data_source"]
+
+    def test_output_distinguishes_bucket_timing_and_spend_from_avoided_loss(self, capsys):
+        data = self.result.as_dict()
+        assert data["first_alert_bucket_start_utc"] == self.result.first_alert.at.isoformat()
+        assert (
+            data["first_alert_bucket_offset_hours"] == self.result.first_alert_bucket_offset_hours
+        )
+        assert Decimal(data["spend_after_first_alert_usd"]) == self.result.spend_after_first_alert
+        assert "source ingestion and response latency excluded" in data["timing_basis"]
+        assert data["response_action_executed"] is False
+        assert data["avoided_loss_proven"] is False
+        assert "exposure_prevented_usd" not in data
+        assert "detection_latency_hours" not in data
+
+        report(self.result)
+        output = capsys.readouterr().out
+        assert "Spend after first alert bucket" in output
+        assert "Source ingestion and response latency are excluded" in output
+        assert "No response action was executed; no avoided loss is proven" in output
+        assert "Exposure prevented" not in output
+
+    def test_no_alert_has_no_spend_after_first_alert(self):
+        result = run([], self.scenario)
+        assert result.first_alert is None
+        assert result.spend_at_first_alert is None
+        assert result.spend_after_first_alert is None
+        data = result.as_dict()
+        assert data["spend_after_first_alert_usd"] is None
+        assert data["spend_through_first_alert_bucket_usd"] is None

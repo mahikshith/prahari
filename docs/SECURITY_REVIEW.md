@@ -1,18 +1,19 @@
 # Security Review — 2026-08-15
 
-Review of the full codebase, not just a diff. Every finding below is fixed and pinned
-by a regression test in `tests/test_security.py`.
+**Consistency review: 2026-10-12.** This design catalog includes deferred targets, not a shipped-feature inventory. Current scope and outcomes are in [DECISIONS.md](DECISIONS.md) and [PROGRESS.md](../PROGRESS.md): GCP + OpenAI, hybrid collection, customer-owned India cloud first, and live-source/response acceptance still required.
+
+Historical 2026-08-15 review and synthetic benchmark notes, with material corrections below. Current targeted changes and regression evidence are tracked in DECISIONS.md/PROGRESS.md; this is not a current full-codebase assurance or certification.
 
 This doubles as the answer to the security questionnaire an Indian bank or GCC will
 send during procurement — the questions are always some version of "what does your
 tool do with our credentials, and how do you know."
 
 **Threat model.** Prahari holds read-only admin credentials for a customer's AI and
-cloud providers, and can be configured to revoke keys. That makes it a higher-value
+cloud providers. Future provider response requires separately authorized write permissions; no revocation adapter/live action is enabled. That makes it a higher-value
 target than most of its customers: a compromise yields organisation-wide inference
 credentials, which is exactly the commodity the LLMjacking market exists to trade.
 Two consequences drive the architecture — the collector runs inside the customer's
-VPC so credentials never cross our boundary, and enforcement is dry-run by default.
+environment to limit central credential exposure, and policy evaluation is dry-run. Provider calls, notification destinations and runtime compromise remain separate risks.
 
 ---
 
@@ -26,7 +27,7 @@ unavoidable — but the value was unvalidated.
 
 Today it comes from environment variables, which limits exposure. In the multi-tenant
 control plane it will arrive from per-tenant configuration, at which point a tenant
-could read or destroy another tenant's data:
+could alter query semantics within the caller's granted permissions; cross-tenant impact depends on isolation and IAM:
 
 ```
 GCP_BILLING_TABLE = "t`) UNION SELECT * FROM `other-tenant.billing.export"
@@ -49,9 +50,7 @@ Decimal("NaN")      > Decimal(any_budget_limit)   # raises InvalidOperation
 sum([Decimal(1), Decimal("NaN")])                 # NaN, silently
 ```
 
-An infinite cost marks **every budget exceeded**. With `EnforcementAction.HARD_STOP`
-configured, that revokes production credentials — a self-inflicted availability
-incident triggered by an upstream response we never validated. `NaN` is quieter and
+An infinite cost can misclassify budget status. The current HARD_STOP policy result does not revoke credentials; a future action adapter would turn bad input into an availability risk. Reject the input before that path exists. `NaN` is quieter and
 harder to debug: it survives every `sum()` in the aggregation path, then raises far
 from the record that caused it.
 
@@ -78,14 +77,10 @@ Both API connectors called `response.raise_for_status()`. The resulting
 `httpx.HTTPStatusError` holds a reference to the originating request, and that
 request's headers contain `x-api-key: sk-ant-admin-…` / `Authorization: Bearer …`.
 
-Nothing in our code logs it — but everything downstream does. An error tracker
-capturing exception attributes, a log line with `exc_info=True`, or a traceback
-rendered with locals all exfiltrate the customer's organisation-wide admin credential
-to a third-party service.
+A downstream error tracker can expose request headers when serializing exception attributes or stack-frame locals. Leak behavior depends on its capture/export configuration; ordinary exception sanitization is not a blanket guarantee.
 
 **Fixed.** `raise_for_status_safely()` converts HTTP failures into `ProviderHTTPError`,
-carrying only the status code, the request path, and a truncated body. Raised
-`from None` so the original cannot be reattached via `__cause__`.
+carrying only status and path; response bodies are excluded because they can echo secrets/customer content. Raised from None to suppress ordinary exception chaining. Stack-frame/heap/local capture can still expose live values and must be disabled or redacted independently.
 
 ### S5 · Report output was not gitignored — **Low**
 
@@ -99,8 +94,9 @@ against a customer, that directory holds real spend figures and project names.
 
 ## Reviewed and found sound
 
-- **Credentials are never stored on connector instances.** Read from the environment
-  at call time, so a config object can be logged or serialised safely. Pinned by test.
+- **Configuration excludes credential values.** OpenAI/Anthropic read environment
+  credentials at call time; SDK clients may hold live credentials in memory.
+  Do not capture heap/locals or serialize runtime clients; inspect logging policy separately.
 - **`MAX_PAGES` bounds pagination** — a cursor bug against a metered API cannot loop
   forever.
 - **Scope dimensions are an allowlist**, so `getattr(record, dimension)` cannot reach
@@ -108,18 +104,17 @@ against a customer, that directory holds real spend figures and project names.
 - **`.gitignore` covers `.env`, service-account JSON, key material and `data/`**, and
   `scripts/setup_remote.ps1` refuses to push if `.env` is tracked or the remote repo
   is public.
-- **No secrets in error messages.** The "not configured" errors name the environment
-  variable, never its value.
+- **Reduced exception exposure.** Configuration errors name variables, not their values, and provider error objects exclude bodies/headers. This does not authorize raw response logging or traceback-local capture.
 
 ## Known gaps, accepted for now
 
 | Gap | Why it is acceptable today | Trigger to fix |
 |---|---|---|
-| No authn/authz layer | Single-user CLI; no server exists yet | Before the first multi-tenant deployment |
+| No authn/authz layer | Single-user CLI; no server exists yet | Before any remotely accessible UI/API or multi-tenant deployment |
 | No audit log for reads | Nothing is exposed over a network | Same — required by N4 |
 | `fetch_pricing_registry.py` follows redirects | Runs manually against a pinned GitHub SHA, checksum-verified after | If it ever runs automatically |
 | Enforcement has no rate limit or circuit breaker | Dry-run only; nothing acts yet | Before the first real revoke |
-| FX rates are placeholders | Synthetic data only | Before any customer-facing figure (A6) |
+| FX placeholder risk resolved 2026-10-12 | Runtime FX defaults are empty; dated rates with provenance must be configured | Verify customer rate source and invoice treatment before cross-currency acceptance |
 
 ---
 
@@ -135,9 +130,7 @@ synthetic fleet, this machine.
 | 5 | 46.1 ms | **16.6 ms** | 2.8× |
 | 40 | 385.7 ms | **84.0 ms** | 4.6× |
 
-Marginal cost per budget fell from **9.7 ms to 1.9 ms**. At production scale — a few
-hundred thousand records and dozens of budgets — the original would have taken tens of
-seconds per evaluation cycle, which rules out the sub-hour detection loop entirely.
+Marginal cost per budget in that historical synthetic benchmark fell from **9.7 ms to 1.9 ms**. These measurements do not establish current production throughput or detection latency; source availability and delivery timing must be measured separately.
 
 Three changes, in increasing order of how much they mattered:
 

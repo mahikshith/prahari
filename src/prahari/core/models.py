@@ -10,7 +10,7 @@ recognises our schema on sight, which is a sales asset as much as an engineering
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -56,13 +56,20 @@ class AllocationMethod(StrEnum):
 
 
 class Completeness(StrEnum):
-    """Whether the source window is settled. Load-bearing: our sub-hour detection
-    claim depends on knowing this, and asserting a number from an incomplete window
-    is how we would permanently lose a finance buyer."""
+    """Source-window completeness, separate from cost provenance.
+
+    Connector age heuristics do not establish a provider delivery/completeness SLA.
+    """
 
     FINAL = "final"  # provider considers this billed and settled
     PARTIAL = "partial"  # window still accumulating
     ESTIMATED = "estimated"  # we derived cost from the price registry
+
+
+class CostBasis(StrEnum):
+    PROVIDER_REPORTED = "provider_reported"
+    ESTIMATED = "estimated"
+    UNPRICED = "unpriced"
 
 
 class TokenCounts(BaseModel):
@@ -71,12 +78,12 @@ class TokenCounts(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    input_tokens: int = 0
-    output_tokens: int = 0
-    cache_read_tokens: int = 0
-    cache_write_tokens: int = 0
-    reasoning_tokens: int = 0
-    requests: int = 0
+    input_tokens: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    cache_read_tokens: int = Field(default=0, ge=0)
+    cache_write_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    requests: int = Field(default=0, ge=0)
 
     @property
     def total_tokens(self) -> int:
@@ -106,6 +113,13 @@ class CostComponents(BaseModel):
     batch_discount: Decimal = Decimal(0)  # negative
     tier_adjustment: Decimal = Decimal(0)
     other: Decimal = Decimal(0)
+
+    @field_validator("*")
+    @classmethod
+    def _finite_components(cls, v: Decimal) -> Decimal:
+        if not is_safe_money(v):
+            raise ValueError("cost components must be finite and plausible")
+        return v
 
     @property
     def total(self) -> Decimal:
@@ -154,9 +168,10 @@ class UsageRecord(BaseModel):
 
     # --- money ---
     costs: CostComponents = Field(default_factory=CostComponents)
-    billed_cost: Decimal = Field(
-        description="Provider-reported billed amount. Authoritative when present."
+    billed_cost: Decimal | None = Field(
+        description="Amount in currency; cost_basis identifies estimates and unavailable prices."
     )
+    cost_basis: CostBasis = CostBasis.PROVIDER_REPORTED
     list_cost: Decimal | None = None
     currency: str = Field(default="USD", min_length=3, max_length=3)
     fx_rate_date: date | None = Field(
@@ -192,7 +207,7 @@ class UsageRecord(BaseModel):
     def _require_tz(cls, v: datetime) -> datetime:
         if v.tzinfo is None:
             raise ValueError("timestamps must be timezone-aware and stored in UTC")
-        return v
+        return v.astimezone(UTC)
 
     @field_validator("billed_cost", "list_cost")
     @classmethod
@@ -201,7 +216,7 @@ class UsageRecord(BaseModel):
 
         `Decimal("Infinity") > Decimal(any_budget)` is True, so an infinite cost from
         a malformed upstream response would mark every budget exceeded and, under
-        HARD_STOP, drive credential revocation against production. NaN is quieter:
+        a future action executor, drive incorrect credential revocation. NaN is quieter:
         it survives every `sum()` in the aggregation path and then raises far from
         the record that caused it. See core/money.py.
         """
@@ -215,13 +230,23 @@ class UsageRecord(BaseModel):
             raise ValueError("period_end precedes period_start")
         return self
 
+    @model_validator(mode="after")
+    def _check_cost_basis(self) -> UsageRecord:
+        if self.billed_cost is None:
+            object.__setattr__(self, "cost_basis", CostBasis.UNPRICED)
+        elif self.cost_basis is CostBasis.UNPRICED:
+            raise ValueError("unpriced usage must have billed_cost=None")
+        elif self.completeness is Completeness.ESTIMATED:
+            object.__setattr__(self, "cost_basis", CostBasis.ESTIMATED)
+        return self
+
     @property
     def is_allocated(self) -> bool:
         return self.allocation_method is not AllocationMethod.UNALLOCATED
 
     @property
     def is_estimated(self) -> bool:
-        return self.completeness is Completeness.ESTIMATED
+        return self.cost_basis is CostBasis.ESTIMATED
 
     @property
     def detection_key(self) -> tuple[str, str]:

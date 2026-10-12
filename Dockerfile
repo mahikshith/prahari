@@ -1,14 +1,14 @@
 # Prahari collector.
 #
 # This image is the security architecture, not packaging convenience. The customer
-# runs it inside their own VPC: admin credentials never cross our boundary, and only
-# aggregated cost records leave. It also removes the "will your Python app run in our
-# environment" conversation entirely.
+# runs it inside their own VPC: provider credentials stay under customer control.
+# Configured notification channels receive alert metadata.
 #
 #   docker build -t prahari-collector .
 #   docker run --rm -v "$PWD/prahari.yaml:/app/prahari.yaml:ro" \
 #                   -v prahari-data:/data \
-#                   --env-file .env \
+#                   --env-file .env -e PRAHARI_DUCKDB_PATH=/data/prahari.duckdb \
+#                   --read-only --tmpfs /tmp \
 #                   prahari-collector validate
 #
 # No secrets are baked in. Credentials arrive by environment or mounted file at run
@@ -44,8 +44,8 @@ RUN useradd --create-home --uid 10001 prahari \
 
 WORKDIR /app
 
-COPY --from=build --chown=prahari:prahari /app/.venv /app/.venv
-COPY --from=build --chown=prahari:prahari /app/src /app/src
+COPY --from=build /app/.venv /app/.venv
+COPY --from=build /app/src /app/src
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -56,9 +56,8 @@ USER prahari
 
 VOLUME ["/data"]
 
-# `validate` touches nothing and exits non-zero on a bad config or missing
-# credentials, so an unhealthy container is visibly unhealthy rather than quietly
-# collecting nothing.
+# This checks configuration and credential presence; collection freshness and
+# notification delivery require separate operational checks.
 HEALTHCHECK --interval=60s --timeout=15s --start-period=20s --retries=3 \
     CMD ["prahari", "validate", "-c", "/app/prahari.yaml"]
 

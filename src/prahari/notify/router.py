@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import smtplib
+import ssl
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -26,7 +27,7 @@ from typing import Protocol
 
 from prahari.core.budget import BudgetState
 from prahari.core.config import AlertConfig
-from prahari.core.fx import format_inr
+from prahari.core.fx import format_money
 from prahari.detect.rules import Alert, Severity
 
 _SEVERITY_ORDER = {Severity.INFO: 0, Severity.WARNING: 1, Severity.CRITICAL: 2}
@@ -87,10 +88,10 @@ class SlackChannel:
             }
         ).encode()
 
-        request = urllib.request.Request(
-            self._url, data=payload, headers={"Content-Type": "application/json"}
-        )
         try:
+            request = urllib.request.Request(
+                self._url, data=payload, headers={"Content-Type": "application/json"}
+            )
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 return 200 <= response.status < 300
         except (urllib.error.URLError, OSError, ValueError):
@@ -124,21 +125,21 @@ class SmtpChannel:
         if not self._to:
             return False
 
-        email = EmailMessage()
-        email["Subject"] = f"[Prahari] {message.title}"
-        email["From"] = self._from
-        email["To"] = ", ".join(self._to)
-        email.set_content(message.body)
-
         try:
+            email = EmailMessage()
+            email["Subject"] = f"[Prahari] {message.title}"
+            email["From"] = self._from
+            email["To"] = ", ".join(self._to)
+            email.set_content(message.body)
+
             with smtplib.SMTP(self._host, self._port, timeout=self._timeout) as smtp:
                 if self._use_tls:
-                    smtp.starttls()
+                    smtp.starttls(context=ssl.create_default_context())
                 if self._username and self._password:
                     smtp.login(self._username, self._password)
                 smtp.send_message(email)
             return True
-        except (smtplib.SMTPException, OSError):
+        except (smtplib.SMTPException, OSError, ValueError):
             return False
 
 
@@ -154,8 +155,8 @@ class Router:
         channels: list[Channel] = []
         if config.console:
             channels.append(ConsoleChannel())
-        if config.slack.enabled and (url := config.slack.webhook_url):
-            channels.append(SlackChannel(url))
+        if config.slack.enabled:
+            channels.append(SlackChannel(config.slack.webhook_url or ""))
         if config.smtp.enabled:
             channels.append(
                 SmtpChannel(
@@ -170,48 +171,68 @@ class Router:
             )
         return cls(channels, Severity(config.min_severity))
 
-    def send(self, message: Message) -> bool:
-        """True if at least one channel accepted it.
+    @property
+    def channel_names(self) -> tuple[str, ...]:
+        return tuple(channel.name for channel in self.channels)
 
-        Partial success counts: if Slack is down but email worked, the alert reached
-        a human, which is the only thing that matters.
-        """
+    @property
+    def required_channels(self) -> tuple[str, ...]:
+        return tuple(name for name in self.channel_names if name != "console") or self.channel_names
+
+    def deliver(self, message: Message, channels: set[str] | None = None) -> dict[str, bool]:
+        """Attempt selected channels and report each result for durable retries."""
         if _SEVERITY_ORDER[message.severity] < _SEVERITY_ORDER[self.min_severity]:
-            return False
-        return any(channel.send(message) for channel in self.channels)
+            return {}
+        results: dict[str, bool] = {}
+        for channel in self.channels:
+            if channels is not None and channel.name not in channels:
+                continue
+            try:
+                results[channel.name] = channel.send(message)
+            except Exception:
+                # Exception text can contain webhook or SMTP credentials.
+                results[channel.name] = False
+        return results
 
-    def send_alert(self, alert: Alert) -> bool:
+    def send(self, message: Message) -> bool:
+        """Compatibility result: any external success, or console-only success."""
+        results = self.deliver(message)
+        return any(results.get(name, False) for name in self.required_channels)
+
+    def alert_message(self, alert: Alert) -> Message:
         provider, credential = alert.detection_key
-        return self.send(
-            Message(
-                title=f"{alert.rule} on {credential}",
-                body="\n".join(
-                    [
-                        alert.explain(),
-                        f"provider: {provider}",
-                        f"time:     {alert.at:%Y-%m-%d %H:%M} UTC",
-                        f"evidence: {json.dumps(alert.evidence, default=str)}",
-                    ]
-                ),
-                severity=alert.severity,
-            )
+        return Message(
+            title=f"{alert.rule} on {credential}",
+            body="\n".join(
+                [
+                    alert.explain(),
+                    f"provider: {provider}",
+                    f"time:     {alert.at:%Y-%m-%d %H:%M} UTC",
+                    f"evidence: {json.dumps(alert.evidence, default=str)}",
+                ]
+            ),
+            severity=alert.severity,
         )
 
-    def send_budget(self, state: BudgetState, crossed: list) -> bool:
+    def budget_message(self, state: BudgetState, crossed: list) -> Message:
         thresholds = ", ".join(f"{t:.0%}" for t in crossed) or "-"
         severity = Severity.CRITICAL if state.pct_used >= 1 else Severity.WARNING
-        return self.send(
-            Message(
-                title=f"Budget {state.status}: {state.budget.name}",
-                body="\n".join(
-                    [
-                        state.explain(),
-                        f"scope:      {state.budget.describe_scope}",
-                        f"crossed:    {thresholds}",
-                        f"remaining:  {format_inr(state.remaining)}",
-                        f"owner:      {state.budget.owner or 'unassigned'}",
-                    ]
-                ),
-                severity=severity,
-            )
+        return Message(
+            title=f"Budget {state.status}: {state.budget.name}",
+            body="\n".join(
+                [
+                    state.explain(),
+                    f"scope:      {state.budget.describe_scope}",
+                    f"crossed:    {thresholds}",
+                    f"remaining:  {format_money(state.remaining, state.budget.currency)}",
+                    f"owner:      {state.budget.owner or 'unassigned'}",
+                ]
+            ),
+            severity=severity,
         )
+
+    def send_alert(self, alert: Alert) -> bool:
+        return self.send(self.alert_message(alert))
+
+    def send_budget(self, state: BudgetState, crossed: list) -> bool:
+        return self.send(self.budget_message(state, crossed))

@@ -14,9 +14,8 @@ Three rules, all learned from how finance teams actually audit a number:
 3. **A missing rate is an error, never a guess.** Silently falling back to a nearby
    rate is how a reconciliation drifts past the 2% gate with nobody noticing.
 
-The built-in table is a **placeholder** (ASSUMPTIONS.md A6). Production must load RBI
-reference rates. The interface is built so that swap is a data change, not a code
-change.
+Rates must be supplied explicitly, with the customer's settlement or accounting
+source. Missing conversions raise instead of silently using invented reference marks.
 """
 
 from __future__ import annotations
@@ -40,22 +39,13 @@ class FxRate:
     source: str
 
     def __post_init__(self) -> None:
-        if self.rate <= 0:
-            raise ValueError("fx rate must be positive")
-
-
-# Placeholder monthly USD->INR marks. Order matters: kept sorted by date.
-# Replace with an RBI reference-rate feed before any customer-facing number.
-_DEFAULT_USD_INR: list[tuple[date, str]] = [
-    (date(2026, 1, 1), "83.20"),
-    (date(2026, 2, 1), "83.55"),
-    (date(2026, 3, 1), "83.90"),
-    (date(2026, 4, 1), "84.10"),
-    (date(2026, 5, 1), "84.05"),
-    (date(2026, 6, 1), "83.85"),
-    (date(2026, 7, 1), "84.30"),
-    (date(2026, 8, 1), "84.45"),
-]
+        if not self.rate.is_finite() or self.rate <= 0:
+            raise ValueError("fx rate must be finite and positive")
+        for name in ("base", "quote"):
+            value = getattr(self, name).upper()
+            if len(value) != 3 or not value.isascii() or not value.isalpha():
+                raise ValueError("fx currencies must be three-letter codes")
+            object.__setattr__(self, name, value)
 
 
 class FxTable:
@@ -67,7 +57,7 @@ class FxTable:
         # thousands of times per report. Cached rather than bisected each time;
         # invalidated whenever the table changes.
         self._cache: dict[tuple[str, str, date], FxRate] = {}
-        for rate in rates if rates is not None else _default_rates():
+        for rate in rates or []:
             self.add(rate)
 
     def add(self, rate: FxRate) -> None:
@@ -118,22 +108,11 @@ class FxTable:
         return series[idx - 1]
 
     def convert(self, amount: Decimal, base: str, quote: str, on: date) -> Decimal:
-        """Convert, rounding to 2dp at the boundary only.
-
-        Callers must not round before this point. Intermediate rounding across
-        thousands of hourly records accumulates into a variance the customer sees.
-        """
+        """Convert at full precision; callers round only after aggregation/display."""
         if base.upper() == quote.upper():
             return amount
         fx = self.rate_on(base, quote, on)
-        return (amount * fx.rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-
-def _default_rates() -> list[FxRate]:
-    return [
-        FxRate("USD", "INR", Decimal(value), as_of, "placeholder")
-        for as_of, value in _DEFAULT_USD_INR
-    ]
+        return amount * fx.rate
 
 
 DEFAULT_TABLE = FxTable()
@@ -179,3 +158,9 @@ def format_inr(amount: Decimal, *, scale: bool = True) -> str:
     if abs(lakh) >= 1:
         return f"Rs {lakh.quantize(Decimal('0.01'))} lakh"
     return f"Rs {group_indian(amount)}"
+
+
+def format_money(amount: Decimal, currency: str, *, scale: bool = True) -> str:
+    if currency.upper() == "INR":
+        return format_inr(amount, scale=scale)
+    return f"{currency.upper()} {amount:,.2f}"

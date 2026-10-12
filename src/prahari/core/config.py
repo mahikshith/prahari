@@ -33,6 +33,7 @@ from prahari.core.budget import (
     BudgetPeriod,
     EnforcementAction,
 )
+from prahari.core.fx import FxRate, FxTable
 from prahari.core.models import Provider
 
 _DURATION = re.compile(r"^\s*(\d+)\s*([smhd])\s*$", re.IGNORECASE)
@@ -210,6 +211,7 @@ class Config(BaseModel):
     detection: DetectionConfig = Field(default_factory=DetectionConfig)
     alerts: AlertConfig = Field(default_factory=AlertConfig)
     display_currency: str = "INR"
+    fx_rates: list[FxRate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Config:
@@ -220,6 +222,12 @@ class Config(BaseModel):
             duplicates = {i for i in ids if ids.count(i) > 1}
             if duplicates:
                 raise ValueError(f"duplicate {label}(s): {sorted(duplicates)}")
+        for provider in (Provider.OPENAI, Provider.ANTHROPIC):
+            if sum(c.enabled and c.provider is provider for c in self.collectors) > 1:
+                raise ValueError(
+                    f"only one enabled {provider.value} collector is supported per process; "
+                    "the admin credential is shared"
+                )
         return self
 
     @property
@@ -228,6 +236,9 @@ class Config(BaseModel):
 
     def to_budgets(self) -> list[Budget]:
         return [b.to_budget() for b in self.budgets]
+
+    def fx_table(self) -> FxTable:
+        return FxTable(self.fx_rates)
 
     def missing_env(self) -> list[str]:
         """Environment variables the config references but which are not set.
@@ -249,8 +260,8 @@ class Config(BaseModel):
 _REQUIRED_ENV: dict[Provider, tuple[str, ...]] = {
     Provider.ANTHROPIC: ("ANTHROPIC_ADMIN_KEY",),
     Provider.OPENAI: ("OPENAI_ADMIN_KEY",),
-    Provider.GCP_VERTEX: ("GOOGLE_APPLICATION_CREDENTIALS",),
 }
+# GCP ADC can resolve workload identity without a credential-file environment variable.
 
 
 def load(path: str | Path) -> Config:
@@ -263,4 +274,7 @@ def load(path: str | Path) -> Config:
     if not isinstance(raw, dict):
         raise ValueError(f"config must be a YAML mapping, got {type(raw).__name__}")
 
-    return Config.model_validate(raw)
+    config = Config.model_validate(raw)
+    if store_path := os.environ.get("PRAHARI_DUCKDB_PATH"):
+        config.store.path = store_path
+    return config

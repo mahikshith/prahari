@@ -7,7 +7,7 @@
 #   docker compose up -d
 #
 # Credentials come from .env or a mounted service-account file. Nothing is baked
-# into the image, and nothing but aggregated cost records leaves this host.
+# into the image. Enabled notification channels receive alert metadata.
 
 services:
   collector:
@@ -28,7 +28,10 @@ services:
       - prahari-data:/data
 
     environment:
-      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp-service-account.json
+      # Optional: use a container path (for example /secrets/gcp-service-account.json)
+      # when a key file is required. Empty preserves keyless ADC discovery.
+      GOOGLE_APPLICATION_CREDENTIALS: ${GOOGLE_APPLICATION_CREDENTIALS:-}
+      PRAHARI_DUCKDB_PATH: /data/prahari.duckdb
 
     # Defence in depth. The collector makes outbound HTTPS calls and writes to
     # /data; it needs nothing else.

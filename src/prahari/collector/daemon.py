@@ -6,21 +6,19 @@ this is.
 
 Design decisions worth defending:
 
-**Watermarks, not fixed windows.** Each collector resumes from where it last got a
-*settled* answer. A crash mid-cycle costs one cycle, not a backfill.
+**Durable scan state.** Billing scans advance provisionally with a bounded overlap;
+other connectors advance their settled watermark only on a complete result.
 
-**Never collect right up to now.** Providers backfill their own data for minutes to
-hours. Collecting a still-filling window and treating it as final produces a total
-that changes tomorrow - the fastest way to lose a finance buyer. Each collector has
-a `settling_lag`, and the watermark only advances past data the provider considers
-complete.
+**Source completeness is explicit.** Each collector has a configured delay, which
+does not prove finality. GCP billing stays provisional; usage connectors currently
+use age heuristics that still require live validation.
 
-**One slow provider must not stall the others.** Collectors run concurrently, and
-failures are isolated per collector with exponential backoff. A GCP outage should not
-stop Anthropic detection, which is the fast path that catches attacks.
+**Bounded concurrent collection.** Failures are isolated with backoff; each fetch has
+a deadline so provider waits cannot indefinitely delay local detection and delivery.
 
 **Detection runs on what was just collected, against baselines from the store.**
-Alerts are deduplicated by the store, so a restart cannot re-page anybody.
+Alerts are deduplicated and delivery is persisted per channel. An ambiguous crash
+after remote acceptance can still cause a duplicate delivery.
 """
 
 from __future__ import annotations
@@ -31,23 +29,25 @@ import logging
 import random
 import signal
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from prahari.connectors.base import Connector, ProviderConfig, ProviderHTTPError
 from prahari.core.budget import evaluate_all
 from prahari.core.config import CollectorConfig, Config
-from prahari.core.models import Provider, UsageRecord
+from prahari.core.fx import FxError
+from prahari.core.models import ChargeCategory, Provider, UsageRecord
 from prahari.detect.aggregate import observations_from_records
-from prahari.detect.rules import Detector
-from prahari.notify.router import Router
+from prahari.detect.rules import Detector, Severity
+from prahari.notify.router import Message, Router
 from prahari.pricing.registry import premium_models
-from prahari.store.duck import Store
+from prahari.store.duck import Store, alert_from_row
 
 log = logging.getLogger("prahari.collector")
 
 MAX_BACKOFF = timedelta(minutes=30)
 MAX_WINDOW = timedelta(days=2)
+FETCH_TIMEOUT_SECONDS = 60
 """Cap on a single fetch. A long outage should catch up over several cycles rather
 than issuing one enormous query that times out and never succeeds."""
 
@@ -170,9 +170,13 @@ class Daemon:
         log.info("stopped")
 
     def _seconds_until_next_due(self) -> float:
-        if not self.collectors:
+        due = [c.next_run for c in self.collectors]
+        notification_due = self.store.next_notification_due(self.router.channel_names)
+        if notification_due:
+            due.append(notification_due)
+        if not due:
             return 60.0
-        soonest = min(c.next_run for c in self.collectors)
+        soonest = min(due)
         return max(1.0, min(60.0, (soonest - datetime.now(UTC)).total_seconds()))
 
     # --- one pass -------------------------------------------------------------
@@ -192,7 +196,7 @@ class Daemon:
                 if isinstance(outcome, BaseException):
                     # Isolated per collector: one provider outage must not stop the
                     # others, especially not the fast Anthropic detection path.
-                    message = f"{state.config.name}: {type(outcome).__name__}: {outcome}"
+                    message = f"{state.config.name}: {type(outcome).__name__}; collection failed"
                     log.warning("collection failed - %s", message)
                     state.schedule_failure(now, message)
                     result.failures.append(message)
@@ -203,10 +207,20 @@ class Daemon:
             result.collected = len(fresh)
 
         if self.config.detection.enabled:
-            raised, notified = self._detect()
-            result.alerts_raised, result.alerts_notified = raised, notified
+            try:
+                result.alerts_raised = self._detect()
+            except (FxError, ValueError) as exc:
+                result.failures.append(f"detection unavailable: {type(exc).__name__}")
+                log.warning("detection unavailable: %s", type(exc).__name__)
 
-        result.budget_notifications = self._check_budgets()
+        try:
+            self._check_budgets()
+        except (FxError, ValueError) as exc:
+            result.failures.append(f"budget evaluation unavailable: {type(exc).__name__}")
+            log.warning("budget evaluation unavailable: %s", type(exc).__name__)
+        delivered = self._deliver_notifications()
+        result.alerts_notified = delivered["alert"]
+        result.budget_notifications = delivered["budget"]
         return result
 
     async def _collect(self, state: CollectorState, now: datetime) -> list[UsageRecord]:
@@ -216,13 +230,21 @@ class Daemon:
 
         log.debug("%s: fetching %s -> %s", state.config.name, start, end)
         try:
-            fetched = await state.connector.fetch(start, end)
+            async with asyncio.timeout(FETCH_TIMEOUT_SECONDS):
+                fetched = await state.connector.fetch(start, end)
         except ProviderHTTPError as exc:
             # Already sanitized of credentials by the connector layer.
             raise RuntimeError(f"HTTP {exc.status_code} from {exc.path}") from None
 
         if fetched.records:
-            self.store.upsert_records(fetched.records)
+            mode = "backfill" if end < now - timedelta(days=1) else "live"
+            records = [
+                record.model_copy(
+                    update={"extensions": {**record.extensions, "collection_mode": mode}}
+                )
+                for record in fetched.records
+            ]
+            self.store.upsert_records(records)
             state.records_collected += len(fetched.records)
 
         if fetched.warnings:
@@ -233,20 +255,28 @@ class Daemon:
         # must be re-fetched, or we would permanently under-report it.
         if fetched.is_complete:
             self.store.set_watermark(state.config.name, end)
+        if state.config.provider is Provider.GCP_VERTEX:
+            self.store.set_watermark(f"{state.config.name}:scan", end)
 
         return fetched.records
 
     def _window(self, state: CollectorState, now: datetime) -> tuple[datetime, datetime]:
         end = now - state.config.settling_lag
-        watermark = self.store.watermark(state.config.name)
+        is_billing = state.config.provider is Provider.GCP_VERTEX
+        watermark = self.store.watermark(
+            f"{state.config.name}:scan" if is_billing else state.config.name
+        )
         start = watermark or (end - state.config.initial_lookback)
+        if is_billing and watermark and end - watermark < timedelta(days=1):
+            # shortcut: refresh one day; invoice reconciliation must recover older corrections.
+            start -= timedelta(days=1)
         # Cap the span so recovering from a long outage takes several ordinary cycles
         # instead of one query large enough to time out forever.
         return start, min(end, start + MAX_WINDOW)
 
     # --- detection ------------------------------------------------------------
 
-    def _detect(self) -> tuple[int, int]:
+    def _detect(self) -> int:
         """Replay a rolling window so baselines are rebuilt from persisted history.
 
         Stateless by design: the detector holds no memory across restarts, so a
@@ -254,58 +284,113 @@ class Daemon:
         Alert deduplication in the store makes the replay safe to repeat.
         """
         now = datetime.now(UTC)
-        history = self.store.records(start=now - timedelta(days=30), end=now)
+        cutoff = now - timedelta(days=30)
+        history = [
+            record
+            for record in self.store.records(start=cutoff, end=now)
+            if record.charge_category is ChargeCategory.USAGE
+            and (
+                record.provider is not Provider.GCP_VERTEX
+                or record.extensions.get("service_category") == "ai"
+                or record.model is not None
+                or record.tokens.total_tokens > 0
+            )
+        ]
         if not history:
-            return 0, 0
+            return 0
 
-        detector = Detector(premium_models=self._premium)
-        raised = notified = 0
+        detector = Detector(
+            premium_models=self._premium,
+            fx=self.config.fx_table(),
+            last_activity=self.store.last_activity_before(cutoff),
+        )
+        raised = 0
         recent_cutoff = now - timedelta(hours=6)
+        live_hours = {
+            (record.detection_key, record.period_start.replace(minute=0, second=0, microsecond=0))
+            for record in history
+            if record.ingested_at >= recent_cutoff
+            and record.extensions.get("collection_mode") == "live"
+        }
 
         for observation in observations_from_records(history):
             for alert in detector.process(observation):
                 # Only act on recent alerts. Replaying 30 days of history would
                 # otherwise re-raise every historical anomaly on first run.
-                if alert.at < recent_cutoff:
+                if alert.at < recent_cutoff and (alert.detection_key, alert.at) not in live_hours:
                     continue
+                if alert.at < recent_cutoff:
+                    alert = replace(
+                        alert,
+                        evidence={
+                            **alert.evidence,
+                            "delayed_source": True,
+                            "source_delay_seconds": int((now - alert.at).total_seconds()),
+                        },
+                    )
                 if not self.store.record_alert(alert):
                     continue  # already seen; never page twice for one event
                 raised += 1
-                if self.router.send_alert(alert):
-                    self.store.mark_notified(alert)
-                    notified += 1
 
-        return raised, notified
+        return raised
 
     # --- budgets --------------------------------------------------------------
 
-    def _check_budgets(self) -> int:
+    def _check_budgets(self) -> None:
         budgets = self.config.to_budgets()
         if not budgets:
-            return 0
+            return
 
         now = datetime.now(UTC)
         records = self.store.records(start=now - timedelta(days=95), end=now)
         if not records:
-            return 0
+            return
 
-        sent = 0
-        for state in evaluate_all(budgets, records, as_of=now):
+        for state in evaluate_all(budgets, records, as_of=now, fx=self.config.fx_table()):
             already = self.store.crossed_thresholds(state.budget.id, state.period_start)
             newly = [
-                t
-                for t in state.budget.thresholds
-                if state.pct_used >= t and t not in set(already)
+                t for t in state.budget.thresholds if state.pct_used >= t and t not in set(already)
             ]
-            if not newly:
-                continue
-
             for threshold in newly:
                 self.store.mark_threshold_crossed(state.budget.id, state.period_start, threshold)
-            if self.router.send_budget(state, newly):
-                sent += 1
+            pending = self.store.unqueued_thresholds(state.budget.id, state.period_start)
+            if pending and self.router.channel_names:
+                self.store.queue_budget(
+                    state.budget.id,
+                    state.period_start,
+                    pending,
+                    self.router.budget_message(state, pending),
+                    self.router.channel_names,
+                )
 
-        return sent
+    def _deliver_notifications(self) -> dict[str, int]:
+        counts = {"alert": 0, "budget": 0}
+        for row in self.store.pending_alerts(unqueued_only=True):
+            alert = alert_from_row(row)
+            self.store.queue_notification(
+                row["alert_id"],
+                "alert",
+                self.router.alert_message(alert),
+                self.router.channel_names,
+            )
+
+        now = datetime.now(UTC)
+        groups: dict[str, list[dict]] = {}
+        for row in self.store.pending_notifications(now, channels=self.router.channel_names):
+            groups.setdefault(row["event_id"], []).append(row)
+        for event_id, rows in groups.items():
+            first = rows[0]
+            message = Message(first["title"], first["body"], Severity(first["severity"]))
+            results = self.router.deliver(message, {row["channel"] for row in rows})
+            for row in rows:
+                self.store.record_delivery(
+                    event_id, row["channel"], results.get(row["channel"], False), now
+                )
+        for event_id, kind in self.store.unacknowledged_notifications():
+            if self.store.notification_complete(event_id):
+                self.store.acknowledge_notification(event_id, kind)
+                counts[kind] += 1
+        return counts
 
 
 def install_signal_handlers(daemon: Daemon, loop: asyncio.AbstractEventLoop) -> None:

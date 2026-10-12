@@ -1,8 +1,8 @@
-"""Backtest: how early would Prahari have caught the incident?
+"""Backtest: where does the first alert fall in a synthetic incident?
 
-Produces the one number that opens every discovery call and every investor meeting:
-
-    "Would have fired at <X> spent - <N> hours before the invoice revealed <Y>."
+Reports cumulative spend through the first alert's hourly usage bucket and spend
+in later buckets. Alert time uses the bucket timestamp, excluding source ingestion
+and response latency. No response action runs, so avoided loss is not proven.
 
 Currently runs on SYNTHETIC data calibrated to published LLMjacking rates, because
 the real GCP billing export is not accessible yet (ASSUMPTIONS.md A1). Every output
@@ -47,28 +47,49 @@ class Result:
     attack_start: datetime
     invoice_discovery: datetime
     first_alert: Alert | None
-    detection_latency_hours: float | None
-    spend_at_detection: Decimal
+    first_alert_bucket_offset_hours: float | None
+    spend_at_first_alert: Decimal | None
     total_spend_at_invoice: Decimal
-    exposure_prevented: Decimal
+    spend_after_first_alert: Decimal | None
     attack_alerts: list[Alert]
     control_alerts: list[Alert]
 
     def as_dict(self) -> dict:
         return {
             "data_source": "SYNTHETIC - calibrated to published LLMjacking rates",
+            "timing_basis": (
+                "hourly usage bucket timestamp; source ingestion and response latency excluded"
+            ),
+            "response_action_executed": False,
+            "avoided_loss_proven": False,
             "attack_credential": self.attack_credential,
             "attack_start_utc": self.attack_start.isoformat(),
             "invoice_discovery_utc": self.invoice_discovery.isoformat(),
-            "first_alert_utc": self.first_alert.at.isoformat() if self.first_alert else None,
+            "first_alert_bucket_start_utc": (
+                self.first_alert.at.isoformat() if self.first_alert else None
+            ),
             "first_alert_rule": str(self.first_alert.rule) if self.first_alert else None,
-            "detection_latency_hours": self.detection_latency_hours,
-            "spend_at_detection_usd": str(self.spend_at_detection),
-            "spend_at_detection_inr": str(to_inr(self.spend_at_detection)),
+            "first_alert_bucket_offset_hours": self.first_alert_bucket_offset_hours,
+            "spend_through_first_alert_bucket_usd": (
+                str(self.spend_at_first_alert) if self.spend_at_first_alert is not None else None
+            ),
+            "spend_through_first_alert_bucket_inr": (
+                str(to_inr(self.spend_at_first_alert))
+                if self.spend_at_first_alert is not None
+                else None
+            ),
             "total_spend_at_invoice_usd": str(self.total_spend_at_invoice),
             "total_spend_at_invoice_inr": str(to_inr(self.total_spend_at_invoice)),
-            "exposure_prevented_usd": str(self.exposure_prevented),
-            "exposure_prevented_inr": str(to_inr(self.exposure_prevented)),
+            "spend_after_first_alert_usd": (
+                str(self.spend_after_first_alert)
+                if self.spend_after_first_alert is not None
+                else None
+            ),
+            "spend_after_first_alert_inr": (
+                str(to_inr(self.spend_after_first_alert))
+                if self.spend_after_first_alert is not None
+                else None
+            ),
             "attack_alert_count": len(self.attack_alerts),
             "control_alert_count": len(self.control_alerts),
             "rules_fired": sorted({str(a.rule) for a in self.attack_alerts}),
@@ -86,7 +107,7 @@ def run(records: list[UsageRecord], scenario: Scenario) -> Result:
 
     attack_alerts: list[Alert] = []
     control_alerts: list[Alert] = []
-    spend_at_detection = Decimal(0)
+    spend_at_first_alert: Decimal | None = None
     first_alert: Alert | None = None
 
     for obs in observations:
@@ -95,15 +116,15 @@ def run(records: list[UsageRecord], scenario: Scenario) -> Result:
                 attack_alerts.append(alert)
                 if first_alert is None:
                     first_alert = alert
-                    spend_at_detection = alert.spend_so_far
+                    spend_at_first_alert = alert.spend_so_far
             elif alert.detection_key == control_key:
                 control_alerts.append(alert)
 
     total_at_invoice = detector.cumulative_spend(attack_key)
 
-    latency = None
+    bucket_offset = None
     if first_alert is not None:
-        latency = (first_alert.at - attack_start).total_seconds() / 3600
+        bucket_offset = (first_alert.at - attack_start).total_seconds() / 3600
 
     return Result(
         attack_credential=scenario.stale_account,
@@ -111,10 +132,12 @@ def run(records: list[UsageRecord], scenario: Scenario) -> Result:
         attack_start=attack_start,
         invoice_discovery=invoice_discovery,
         first_alert=first_alert,
-        detection_latency_hours=latency,
-        spend_at_detection=spend_at_detection,
+        first_alert_bucket_offset_hours=bucket_offset,
+        spend_at_first_alert=spend_at_first_alert,
         total_spend_at_invoice=total_at_invoice,
-        exposure_prevented=total_at_invoice - spend_at_detection,
+        spend_after_first_alert=(
+            total_at_invoice - spend_at_first_alert if spend_at_first_alert is not None else None
+        ),
         attack_alerts=attack_alerts,
         control_alerts=control_alerts,
     )
@@ -124,6 +147,9 @@ def report(r: Result) -> None:
     print(RULE)
     print("  PRAHARI - INCIDENT BACKTEST")
     print("  *** SYNTHETIC DATA - modelled, not measured. See ASSUMPTIONS.md A1. ***")
+    print("  Alert time uses hourly usage bucket timestamps.")
+    print("  Source ingestion and response latency are excluded.")
+    print("  No response action was executed; no avoided loss is proven.")
     print(RULE)
     print()
 
@@ -132,25 +158,35 @@ def report(r: Result) -> None:
         print("  This is a genuine finding - investigate thresholds before proceeding.")
         return
 
-    hours = r.detection_latency_hours or 0
+    hours = r.first_alert_bucket_offset_hours or 0
     lead_hours = (r.invoice_discovery - r.first_alert.at).total_seconds() / 3600
 
     print(f"  Attack began         {r.attack_start:%Y-%m-%d %H:%M} UTC")
-    print(f"  Prahari alerted      {r.first_alert.at:%Y-%m-%d %H:%M} UTC   "
-          f"({hours:.0f}h after onset, rule: {r.first_alert.rule})")
+    print(
+        f"  Alert bucket starts  {r.first_alert.at:%Y-%m-%d %H:%M} UTC   "
+        f"({hours:.0f}h bucket offset after onset, rule: {r.first_alert.rule})"
+    )
     print(f"  Invoice revealed it  {r.invoice_discovery:%Y-%m-%d %H:%M} UTC")
     print()
-    print(f"  Spend at detection   {format_inr_crore(r.spend_at_detection):>18}"
-          f"   (${r.spend_at_detection:,.0f})")
-    print(f"  Spend at invoice     {format_inr_crore(r.total_spend_at_invoice):>18}"
-          f"   (${r.total_spend_at_invoice:,.0f})")
-    print(f"  Exposure prevented   {format_inr_crore(r.exposure_prevented):>18}"
-          f"   (${r.exposure_prevented:,.0f})")
+    assert r.spend_at_first_alert is not None and r.spend_after_first_alert is not None
+    print(
+        f"  Spend through first alert bucket  {format_inr_crore(r.spend_at_first_alert):>18}"
+        f"   (${r.spend_at_first_alert:,.0f})"
+    )
+    print(
+        f"  Spend at invoice     {format_inr_crore(r.total_spend_at_invoice):>18}"
+        f"   (${r.total_spend_at_invoice:,.0f})"
+    )
+    print(
+        f"  Spend after first alert bucket    {format_inr_crore(r.spend_after_first_alert):>18}"
+        f"   (${r.spend_after_first_alert:,.0f})"
+    )
     print()
     print(RULE)
-    print(f"  Detected at {format_inr_crore(r.spend_at_detection)} spent - "
-          f"{lead_hours / 24:.0f} days and {format_inr_crore(r.exposure_prevented)}")
-    print("  before the invoice revealed it.")
+    print(f"  First alert bucket precedes invoice discovery by {lead_hours / 24:.0f} days.")
+    print(
+        f"  Later buckets contain {format_inr_crore(r.spend_after_first_alert)} of synthetic spend."
+    )
     print(RULE)
     print()
 
@@ -191,8 +227,10 @@ def main() -> int:
 
     scenario = Scenario(seed=args.seed)
     records = generate(scenario)
-    print(f"\nGenerated {len(records):,} synthetic hourly records "
-          f"across 2 credentials, {scenario.invoice_discovery_day} days.\n")
+    print(
+        f"\nGenerated {len(records):,} synthetic hourly records "
+        f"across 2 credentials, {scenario.invoice_discovery_day} days.\n"
+    )
 
     result = run(records, scenario)
     report(result)

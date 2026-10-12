@@ -40,11 +40,13 @@ from prahari.connectors.base import (
 from prahari.core.models import (
     ChargeCategory,
     Completeness,
+    CostBasis,
     CostComponents,
     Provider,
     TokenCounts,
     UsageRecord,
 )
+from prahari.core.money import parse_money
 from prahari.pricing.registry import lookup
 
 BASE_URL = "https://api.anthropic.com"
@@ -134,7 +136,7 @@ class AnthropicConnector(Connector):
             "ending_at": _iso(end),
             "bucket_width": "1h",
             "group_by[]": ["api_key_id", "model", "workspace_id", "service_tier"],
-            "limit": 1000,
+            "limit": 168,
         }
 
         records: list[UsageRecord] = []
@@ -151,9 +153,8 @@ class AnthropicConnector(Connector):
 
             for result in bucket.get("results", []):
                 record = self._to_record(result, bucket_start, bucket_end, settled, now)
-                if record is not None:
-                    records.append(record)
-                else:
+                records.append(record)
+                if record.cost_basis is CostBasis.UNPRICED:
                     warnings.append(
                         f"unpriced model {result.get('model')!r} at {bucket_start:%Y-%m-%d %H:%M}"
                     )
@@ -173,7 +174,7 @@ class AnthropicConnector(Connector):
         bucket_end: datetime,
         settled: bool,
         now: datetime,
-    ) -> UsageRecord | None:
+    ) -> UsageRecord:
         model = result.get("model")
 
         tokens = TokenCounts(
@@ -185,12 +186,10 @@ class AnthropicConnector(Connector):
         )
 
         price = lookup(model, provider="anthropic") if model else None
-        if price is None:
-            return None
 
         # Components stay separate. Collapsing them early is where naive tools produce
         # wrong totals, and wrong totals fail the <=2% reconciliation gate.
-        costs = CostComponents(
+        costs = CostComponents() if price is None else CostComponents(
             input_cost=price.input_cost_per_token * tokens.input_tokens,
             output_cost=price.output_cost_per_token * tokens.output_tokens,
             cache_read_cost=(price.cache_read_cost_per_token or price.input_cost_per_token)
@@ -211,14 +210,18 @@ class AnthropicConnector(Connector):
             costs=costs,
             # Estimated from the registry: the usage endpoint reports tokens, not
             # money. cost_report() supplies billed truth on a slower cadence.
-            billed_cost=costs.total,
+            billed_cost=costs.total if price is not None else None,
+            cost_basis=CostBasis.ESTIMATED if price is not None else CostBasis.UNPRICED,
             currency="USD",
             period_start=bucket_start,
             period_end=bucket_end,
             ingested_at=now,
             source=f"anthropic:{USAGE_PATH}",
             completeness=Completeness.ESTIMATED if settled else Completeness.PARTIAL,
-            extensions={"priced_from": "registry", "settled": settled},
+            extensions={
+                "priced_from": "registry" if price is not None else None,
+                "settled": settled,
+            },
         )
 
     # --- reconciliation -------------------------------------------------------
@@ -236,14 +239,17 @@ class AnthropicConnector(Connector):
             "starting_at": _iso(start),
             "ending_at": _iso(end),
             "bucket_width": "1d",
-            "limit": 1000,
+            "limit": 31,
         }
 
         totals: dict[str, Decimal] = {}
         async for bucket in self._paginate(COST_PATH, params):
             day = _parse(bucket["starting_at"]).date().isoformat()
             for result in bucket.get("results", []):
-                amount = Decimal(str(result.get("amount", "0")))
+                if str(result.get("currency") or "").upper() != "USD":
+                    raise ValueError("Anthropic cost report must use USD")
+                # The cost endpoint reports fractional cents, not dollars.
+                amount = parse_money(result.get("amount"), field="amount") / Decimal(100)
                 totals[day] = totals.get(day, Decimal(0)) + amount
         return totals
 

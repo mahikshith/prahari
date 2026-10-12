@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import httpx
 import pytest
@@ -22,7 +23,8 @@ import respx
 from prahari.connectors.anthropic import AnthropicConnector
 from prahari.connectors.base import ProviderConfig
 from prahari.connectors.openai import OpenAIConnector
-from prahari.core.models import Completeness, Provider
+from prahari.core.models import Completeness, CostBasis, Provider
+from prahari.core.money import MoneyError
 
 # Old enough that every window is settled, so tests don't depend on wall-clock.
 SETTLED_START = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
@@ -190,10 +192,73 @@ class TestAnthropicConnector:
         )
         result = await conn.fetch(SETTLED_START, SETTLED_END)
         assert {r.api_key_id for r in result.records} == {"k1", "k2"}
+        assert route.calls[0].request.url.params["limit"] == "168"
+        assert route.calls[1].request.url.params["page"] == "page_2"
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_flags_unpriced_models_instead_of_dropping_silently(self):
+    async def test_cost_report_converts_fractional_cents_across_pages(self):
+        route = respx.get("https://api.anthropic.com/v1/organizations/cost_report")
+        route.side_effect = [
+            httpx.Response(
+                200,
+                json={
+                    "data": [anthropic_bucket(SETTLED_START, [
+                        {"amount": "123.78912", "currency": "USD"},
+                    ])],
+                    "has_more": True,
+                    "next_page": "cost_page_2",
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "data": [anthropic_bucket(SETTLED_START, [
+                        {"amount": "-23.78912", "currency": "USD"},
+                    ])],
+                    "has_more": False,
+                },
+            ),
+        ]
+        conn = AnthropicConnector(ProviderConfig(provider=Provider.ANTHROPIC, account_id="org"))
+        totals = await conn.cost_report(SETTLED_START, SETTLED_START + timedelta(days=1))
+        assert totals == {"2026-06-01": Decimal("1")}
+        assert route.calls[0].request.url.params["limit"] == "31"
+        assert route.calls[1].request.url.params["page"] == "cost_page_2"
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("amount", [None, "", "NaN", "Infinity", "invalid", "1e16"])
+    async def test_cost_report_rejects_invalid_amounts(self, amount):
+        respx.get("https://api.anthropic.com/v1/organizations/cost_report").mock(
+            return_value=httpx.Response(200, json={
+                "data": [anthropic_bucket(SETTLED_START, [{"amount": amount, "currency": "USD"}])],
+                "has_more": False,
+            })
+        )
+        conn = AnthropicConnector(ProviderConfig(provider=Provider.ANTHROPIC, account_id="org"))
+        with pytest.raises(MoneyError):
+            await conn.cost_report(SETTLED_START, SETTLED_END)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("currency", [None, "INR"])
+    async def test_cost_report_rejects_missing_or_unsupported_currency(self, currency):
+        respx.get("https://api.anthropic.com/v1/organizations/cost_report").mock(
+            return_value=httpx.Response(200, json={
+                "data": [anthropic_bucket(SETTLED_START, [
+                    {"amount": "100", "currency": currency},
+                ])],
+                "has_more": False,
+            })
+        )
+        conn = AnthropicConnector(ProviderConfig(provider=Provider.ANTHROPIC, account_id="org"))
+        with pytest.raises(ValueError, match="must use USD"):
+            await conn.cost_report(SETTLED_START, SETTLED_END)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_preserves_unpriced_models_with_unknown_cost(self):
         respx.get("https://api.anthropic.com/v1/organizations/usage_report/messages").mock(
             return_value=httpx.Response(
                 200,
@@ -221,7 +286,12 @@ class TestAnthropicConnector:
         )
         result = await conn.fetch(SETTLED_START, SETTLED_END)
 
-        assert result.records == []
+        rec = result.records[0]
+        assert rec.api_key_id == "k1"
+        assert rec.model == "claude-model-from-the-future"
+        assert rec.tokens.total_tokens == 110
+        assert rec.billed_cost is None
+        assert rec.cost_basis is CostBasis.UNPRICED
         assert result.warnings and "claude-model-from-the-future" in result.warnings[0]
         assert result.is_complete is False
 
@@ -258,6 +328,8 @@ class TestAnthropicConnector:
         )
         result = await conn.fetch(now, now + timedelta(hours=1))
         assert result.records[0].completeness is Completeness.PARTIAL
+        assert result.records[0].cost_basis is CostBasis.ESTIMATED
+        assert result.records[0].is_estimated
 
     @respx.mock
     @pytest.mark.asyncio
@@ -284,6 +356,30 @@ class TestAnthropicConnector:
 
 
 class TestOpenAIConnector:
+    @respx.mock
+    @pytest.mark.asyncio
+    async def test_preserves_unpriced_model_identity_and_usage(self):
+        respx.get("https://api.openai.com/v1/organization/usage/completions").mock(
+            return_value=httpx.Response(200, json={
+                "data": [openai_bucket(SETTLED_START, [{
+                    "model": "unpriced-future-model", "api_key_id": "key_unknown",
+                    "project_id": "project_unknown", "input_tokens": 100,
+                    "output_tokens": 10, "num_model_requests": 3,
+                }])],
+                "has_more": False,
+            })
+        )
+        conn = OpenAIConnector(ProviderConfig(provider=Provider.OPENAI, account_id="org"))
+        result = await conn.fetch(SETTLED_START, SETTLED_END)
+        rec = result.records[0]
+        assert rec.api_key_id == "key_unknown"
+        assert rec.project_id == "project_unknown"
+        assert rec.tokens.total_tokens == 110
+        assert rec.tokens.requests == 3
+        assert rec.billed_cost is None
+        assert rec.cost_basis is CostBasis.UNPRICED
+        assert result.warnings and "unpriced-future-model" in result.warnings[0]
+
     @respx.mock
     @pytest.mark.asyncio
     async def test_subtracts_cached_tokens_from_input(self):
@@ -359,7 +455,39 @@ class TestOpenAIConnector:
 
         conn = OpenAIConnector(ProviderConfig(provider=Provider.OPENAI, account_id="org_test"))
         totals = await conn.cost_report(SETTLED_START, SETTLED_START + timedelta(days=1))
-        assert totals["2026-06-01"] == pytest.approx(130.0)
+        assert totals["2026-06-01"] == Decimal("130.0")
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", [None, "", "NaN", "Infinity", "invalid", "1e16"])
+    async def test_cost_report_rejects_invalid_amounts(self, value):
+        respx.get("https://api.openai.com/v1/organization/costs").mock(
+            return_value=httpx.Response(200, json={
+                "data": [openai_bucket(SETTLED_START, [
+                    {"amount": {"value": value, "currency": "usd"}},
+                ])],
+                "has_more": False,
+            })
+        )
+        conn = OpenAIConnector(ProviderConfig(provider=Provider.OPENAI, account_id="org"))
+        with pytest.raises(MoneyError):
+            await conn.cost_report(SETTLED_START, SETTLED_END)
+
+    @respx.mock
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("currency", [None, "inr"])
+    async def test_cost_report_rejects_missing_or_unsupported_currency(self, currency):
+        respx.get("https://api.openai.com/v1/organization/costs").mock(
+            return_value=httpx.Response(200, json={
+                "data": [openai_bucket(SETTLED_START, [
+                    {"amount": {"value": "1", "currency": currency}},
+                ])],
+                "has_more": False,
+            })
+        )
+        conn = OpenAIConnector(ProviderConfig(provider=Provider.OPENAI, account_id="org"))
+        with pytest.raises(ValueError, match="must use USD"):
+            await conn.cost_report(SETTLED_START, SETTLED_END)
 
 
 class TestWindowValidation:

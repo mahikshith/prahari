@@ -207,6 +207,14 @@ Status means **accepted** for a product choice, **implemented locally** for a co
 - **Expected outcome and acceptance:** each partner reviews the applicable matrix and full dataflow, with retention/escalation owners and model-specific processing commitments. A residency finding identifies its policy and evidence rather than claim certification.
 - **Actual outcome:** the sourced review distinguishes DPDP phased commencement, CERT-In, payment-specific RBI scope and SEBI cloud/CSCRF abeyance nuances. No customer's legal applicability or live residency has been certified.
 
+## D026 Publish the foundation on a separate branch and draft PR
+
+**Date:** 2026-10-12. **Status:** completed.
+- **Decision and evidence:** commit and push the authorized changes on codex/prahari-pilot-foundation, with a draft pull request collecting implementation and research.
+- **Rationale and importance:** preserve a concrete review checkpoint for a broad foundation repair, including migration and live-validation limits, before merging or deploying it.
+- **Expected outcome and acceptance:** the remote branch contains the tested code and durable decision record, and the PR is accessible for review.
+- **Actual outcome:** implementation/research commit `7665f432971e5b068c23d012e6c3b7487312699e` is pushed; [draft PR #1](https://github.com/mahikshith/prahari/pull/1) is open and attached to this chat. The 334-test suite covers that implementation; this publication entry is a documentation-only follow-up. No merge or deployment occurred.
+
 ## Updating actual outcomes
 
 Append dated evidence under the relevant ID after final tests, live-source checks, invoice reconciliation or customer trials. Include the tested revision/window, command or artifact, result and material limits. Keep historical outcomes; add a new decision when the choice changes. Do not replace a pending live outcome with a passing mocked test.

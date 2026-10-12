@@ -41,6 +41,7 @@ from prahari.connectors.base import Connector, FetchResult, ProviderConfig
 from prahari.core.models import (
     ChargeCategory,
     Completeness,
+    CostBasis,
     CostComponents,
     Provider,
     TokenCounts,
@@ -101,6 +102,8 @@ SELECT
   project.name                                 AS project_name,
   location.region                              AS region,
   currency                                     AS currency,
+  cost_type                                    AS cost_type,
+  invoice.month                                AS invoice_month,
   SUM(cost)                                    AS gross_cost,
   SUM(IFNULL((SELECT SUM(c.amount) FROM UNNEST(credits) c), 0)) AS credit_amount,
   SUM(usage.amount)                            AS usage_amount,
@@ -116,8 +119,9 @@ WHERE usage_start_time >= @start
   -- customer's is measured in TB; without this the first query is a bill of its own,
   -- which would be a memorable way to introduce a cost-control product.
   AND _PARTITIONTIME >= TIMESTAMP_SUB(@start, INTERVAL 2 DAY)
-  AND _PARTITIONTIME <  TIMESTAMP_ADD(@end, INTERVAL 2 DAY)
-GROUP BY hour, service, sku, project_id, project_name, region, currency
+  -- shortcut: historical queries scan newer partitions, add export-cursor reconciliation
+  -- when long backfills need bounded scan costs; late exports must remain visible.
+GROUP BY hour, service, sku, project_id, project_name, region, currency, cost_type, invoice_month
 HAVING gross_cost != 0 OR credit_amount != 0
 ORDER BY hour
 """
@@ -184,6 +188,7 @@ class GCPBillingConnector(Connector):
             job = client.query(
                 USAGE_QUERY.format(table=self._table()),
                 job_config=bigquery.QueryJobConfig(
+                    job_timeout_ms=40_000,
                     query_parameters=[
                         bigquery.ScalarQueryParameter("start", "TIMESTAMP", start),
                         bigquery.ScalarQueryParameter("end", "TIMESTAMP", end),
@@ -192,8 +197,11 @@ class GCPBillingConnector(Connector):
                         ),
                     ]
                 ),
+                timeout=15,
+                retry=None,
+                job_retry=None,
             )
-            return list(job)
+            return list(job.result(timeout=40, retry=None, job_retry=None))
 
         # The BigQuery client is synchronous and a billing-export query can run for
         # minutes. Called directly it would block the event loop and stall every
@@ -212,23 +220,18 @@ class GCPBillingConnector(Connector):
             if export_time and (latest_export is None or export_time > latest_export):
                 latest_export = export_time
 
-        # The export lags by hours and Google guarantees nothing. If it has not caught
-        # up past our window end, the window is still filling - say so rather than
-        # presenting a total that will change tomorrow.
-        complete = latest_export is not None and latest_export >= end
-        if not complete:
-            warnings.append(
-                f"billing export has not settled past {end:%Y-%m-%d %H:%M}Z "
-                f"(latest export {latest_export:%Y-%m-%d %H:%M}Z)"
-                if latest_export
-                else "no export rows in window"
-            )
+        # Export arrival is not a completeness watermark; later corrections can arrive.
+        warnings.append(
+            f"billing export is not settled (latest row export {latest_export:%Y-%m-%d %H:%M}Z)"
+            if latest_export
+            else "no export rows in window; billing completeness is unknown"
+        )
 
         return FetchResult(
             records=records,
             window_start=start,
             window_end=end,
-            is_complete=complete,
+            is_complete=False,
             warnings=warnings or None,
         )
 
@@ -236,6 +239,16 @@ class GCPBillingConnector(Connector):
         service = row["service"] or "Unknown"
         sku = row["sku"] or ""
         category = classify(service)
+        cost_type = row["cost_type"]
+        charge_categories = {
+            "regular": ChargeCategory.USAGE,
+            "tax": ChargeCategory.TAX,
+            "adjustment": ChargeCategory.ADJUSTMENT,
+            "rounding_error": ChargeCategory.ADJUSTMENT,
+        }
+        if cost_type not in charge_categories:
+            raise ValueError(f"unsupported GCP cost_type: {cost_type!r}")
+        charge_category = charge_categories[cost_type]
 
         # BigQuery FLOAT64 can legitimately hold NaN and Infinity. Parsed, not cast:
         # an infinite cost compares as greater than every budget limit and would drive
@@ -245,7 +258,11 @@ class GCPBillingConnector(Connector):
         net = gross + credits
 
         hour = _as_utc(row["hour"])
-        tokens = _tokens_from_usage(row, category, sku)
+        tokens = (
+            _tokens_from_usage(row, category, sku)
+            if charge_category is ChargeCategory.USAGE
+            else TokenCounts()
+        )
 
         return UsageRecord(
             provider=Provider.GCP_VERTEX,
@@ -257,7 +274,7 @@ class GCPBillingConnector(Connector):
             model=_model_from_sku(sku) if category == "ai" else None,
             operation=sku or None,
             region=row["region"],
-            charge_category=ChargeCategory.USAGE,
+            charge_category=charge_category,
             tokens=tokens,
             costs=CostComponents(
                 other=gross,
@@ -266,17 +283,19 @@ class GCPBillingConnector(Connector):
                 tier_adjustment=credits,
             ),
             billed_cost=net,
-            list_cost=gross,
+            cost_basis=CostBasis.PROVIDER_REPORTED,
             currency=(row["currency"] or "USD").upper(),
             period_start=hour,
             period_end=hour.replace(minute=59, second=59),
             ingested_at=now,
             cost_centre=row["cost_centre"],
             source="gcp:bigquery_billing_export",
-            completeness=Completeness.FINAL,
+            completeness=Completeness.PARTIAL,
             extensions={
                 "service": service,
                 "sku": sku,
+                "cost_type": cost_type,
+                "invoice_month": row["invoice_month"],
                 "service_category": category,
                 "project_name": row["project_name"],
                 "usage_amount": float(row["usage_amount"] or 0),
@@ -300,6 +319,9 @@ class GCPBillingConnector(Connector):
             job = client.query(
                 f"SELECT 1 FROM `{self._table()}` LIMIT 1",
                 job_config=bigquery.QueryJobConfig(dry_run=True, use_query_cache=False),
+                timeout=15,
+                retry=None,
+                job_retry=None,
             )
             return job is not None
         except Exception:
@@ -364,7 +386,7 @@ def _tokens_from_usage(row: Any, category: str, sku: str) -> TokenCounts:
         return TokenCounts()
 
     unit = (row["usage_unit"] or "").lower()
-    if "token" not in unit and "character" not in unit:
+    if unit not in {"token", "tokens"} or "storage" in sku.lower():
         return TokenCounts()
 
     amount = int(row["usage_amount"] or 0)
@@ -385,18 +407,23 @@ def _unit_economics(row: Any, service: str) -> dict[str, Any]:
     """
     amount = float(row["usage_amount"] or 0)
     unit = (row["usage_unit"] or "").lower()
+    sku = (row["sku"] or "").lower()
 
     if service.startswith("BigQuery"):
-        if "byte" in unit:
+        if unit in {"byte", "bytes"} and "analysis" in sku:
             return {"bq_tib_scanned": amount / (1024**4)}
-        if "second" in unit:
+        if unit in {"second", "seconds"} and "slot" in sku:
             return {"bq_slot_hours": amount / 3600}
     elif service.startswith("Cloud Run"):
-        if "cpu" in unit or "vcpu" in unit:
+        if unit in {"cpu-second", "cpu-seconds", "vcpu-second", "vcpu-seconds"} or (
+            unit in {"second", "seconds"} and "cpu" in sku
+        ):
             return {"run_vcpu_hours": amount / 3600}
-        if "byte-second" in unit or "gibibyte second" in unit:
+        if unit in {"byte-second", "byte-seconds"}:
+            return {"run_gib_hours": amount / (1024**3 * 3600)}
+        if unit in {"gibibyte second", "gibibyte seconds", "gib-second", "gib-seconds"}:
             return {"run_gib_hours": amount / 3600}
-        if "request" in unit:
+        if unit in {"request", "requests"}:
             return {"run_requests": amount}
     return {}
 

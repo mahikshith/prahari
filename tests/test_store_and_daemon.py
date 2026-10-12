@@ -202,16 +202,13 @@ class TestAlertCurrency:
         """Regression: every rule hardcoded currency="USD", so an Indian estate saw
         its rupee figures labelled as dollars - an 84x misstatement of the one number
         the alert exists to convey."""
+        from prahari.core.fx import FxRate, FxTable
         from prahari.detect.aggregate import observations_from_records
         from prahari.detect.rules import Detector
 
         records = [rec(h, "20") for h in range(40)] + [rec(40, "5000")]
-        detector = Detector()
-        alerts = [
-            a
-            for obs in observations_from_records(records)
-            for a in detector.process(obs)
-        ]
+        detector = Detector(fx=FxTable([FxRate("USD", "INR", Decimal("85"), H.date(), "test")]))
+        alerts = [a for obs in observations_from_records(records) for a in detector.process(obs)]
 
         assert alerts
         assert all(a.currency == "INR" for a in alerts)
@@ -236,8 +233,13 @@ class TestBudgetThresholdState:
 class TestDurationParsing:
     @pytest.mark.parametrize(
         ("text", "expected"),
-        [("30s", timedelta(seconds=30)), ("5m", timedelta(minutes=5)),
-         ("2h", timedelta(hours=2)), ("7d", timedelta(days=7)), (90, timedelta(seconds=90))],
+        [
+            ("30s", timedelta(seconds=30)),
+            ("5m", timedelta(minutes=5)),
+            ("2h", timedelta(hours=2)),
+            ("7d", timedelta(days=7)),
+            (90, timedelta(seconds=90)),
+        ],
     )
     def test_valid(self, text, expected):
         assert parse_duration(text) == expected
@@ -297,9 +299,7 @@ class TestConfigValidation:
 
     def test_missing_env_is_reported_not_guessed(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_ADMIN_KEY", raising=False)
-        cfg = Config.model_validate(
-            {"collectors": [{"provider": "anthropic", "account_id": "o"}]}
-        )
+        cfg = Config.model_validate({"collectors": [{"provider": "anthropic", "account_id": "o"}]})
         assert "ANTHROPIC_ADMIN_KEY" in cfg.missing_env()
 
     def test_disabled_collectors_do_not_demand_credentials(self, monkeypatch):
@@ -473,7 +473,8 @@ class TestDaemonCycle:
             result = await daemon.cycle()
 
             assert len(result.failures) == 1
-            assert "provider is down" in result.failures[0]
+            assert "RuntimeError" in result.failures[0]
+            assert "provider is down" not in result.failures[0]
             assert state.consecutive_failures == 1
             assert state.next_run > datetime.now(UTC)
 

@@ -172,13 +172,13 @@ class TestErrorsCarryNoCredentials:
 
     SECRET = "sk-ant-admin-DO-NOT-LEAK"
 
-    def _response(self, status: int) -> httpx.Response:
+    def _response(self, status: int, text: str = "nope") -> httpx.Response:
         request = httpx.Request(
             "GET",
             "https://api.anthropic.com/v1/organizations/usage_report/messages",
             headers={"x-api-key": self.SECRET, "authorization": f"Bearer {self.SECRET}"},
         )
-        return httpx.Response(status, request=request, text="nope")
+        return httpx.Response(status, request=request, text=text)
 
     def test_sanitized_error_does_not_contain_the_key(self):
         with pytest.raises(ProviderHTTPError) as caught:
@@ -187,6 +187,14 @@ class TestErrorsCarryNoCredentials:
         exc = caught.value
         blob = " ".join([repr(exc), str(exc), repr(exc.__dict__), repr(exc.args)])
         assert self.SECRET not in blob
+
+    def test_provider_body_cannot_echo_credentials_or_customer_content(self):
+        content = "private customer prompt"
+        with pytest.raises(ProviderHTTPError) as caught:
+            raise_for_status_safely(self._response(400, f"{self.SECRET}: {content}"), "/v1/x")
+        blob = repr(caught.value) + repr(caught.value.__dict__) + repr(caught.value.args)
+        assert self.SECRET not in blob
+        assert content not in blob
 
     def test_sanitized_error_drops_the_request_object(self):
         with pytest.raises(ProviderHTTPError) as caught:

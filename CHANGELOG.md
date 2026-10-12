@@ -6,6 +6,21 @@ Architectural and licence decisions are recorded here as well as code changes �
 
 ## [Unreleased]
 
+### 2026-10-12 Pilot foundation and decision record
+
+**Validation:** 334 local tests passed in 12.44s; Ruff, dependency-lock, whitespace and synthetic backtest checks passed. Docker is unavailable; live-provider/invoice acceptance is pending. This entry supersedes conflicting scope, guarantee and deployment statements in older development notes below; those notes remain historical.
+
+- Added docs/DECISIONS.md with stable IDs, rationale, importance, tradeoffs, acceptance criteria and separate actual outcomes.
+- Recorded GCP + OpenAI, two buyer groups/one solo-founder core, customer-owned India hosting first, and hybrid collection superseding the earlier gateway ban.
+- Repaired cost provenance/unknown-price handling, Decimal/FX/currency boundaries, provider unit semantics, provisional GCP scan/overlap handling and persisted older activity.
+- Added per-channel durable notification recovery and retry state; console does not acknowledge configured remote delivery. Delivery remains at-least-once, not exactly-once.
+- Tightened credential-bearing HTTP errors, notification transport and container/build inputs; preserved exact verified registry bytes and bounded shared admin-provider organization configuration.
+- Replaced unsupported absence-of-competition/localization/savings claims with sourced market evidence and pilot hypotheses; added the metadata-only network plan.
+- Added the current pilot plan/repository assessment; GCP ADC is keyless-compatible, native currency is labeled correctly, collection waits are bounded and schema-v2 migration/rollback is covered locally.
+- Added a critical upstream OSS/license/issue assessment and dated India regulatory applicability matrix. Native GCP controls are included in the competitor/pilot baseline.
+- Backtest JSON replaces prevention/detection-latency fields with bucket timing and later-bucket spend, explicitly excluding source/response delay and proving no avoided loss. Existing demo consumers must use the new keys.
+- Rewrote the incident draft around founder-reported weekend exposure and separately synthetic scenarios. No live gateway/cloud/network controls, provider revocation, customer data acquisition or measured savings are included.
+
 ### Added — the collector became a running program (roadmap A3, B1–B4)
 - **DuckDB store** (`store/duck.py`). Idempotent upserts keyed on a deterministic `record_id`, so a re-fetched window replaces rather than double-counts — and a `PARTIAL` hour is overwritten by its `FINAL` version. Watermarks that never rewind, alert deduplication, and budget-threshold state.
 - **Collector daemon** (`collector/daemon.py`). Watermark-driven incremental fetch, per-collector settling lag, concurrent collection with failures isolated per provider, exponential backoff with jitter, capped catch-up windows, graceful shutdown.

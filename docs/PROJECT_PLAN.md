@@ -1,22 +1,28 @@
 # Project Plan
 
+**Historical staging snapshot:** stage/status claims, schedules and checklists below preserve an earlier plan, not current completion evidence. DECISIONS.md/PROGRESS.md govern GCP + OpenAI, hybrid scope and actual outcomes; the founding event is reported and the existing replay synthetic.
+
+**Consistency review: 2026-10-12.** This design catalog includes deferred targets, not a shipped-feature inventory. Current scope and outcomes are in [DECISIONS.md](DECISIONS.md) and [PROGRESS.md](../PROGRESS.md): GCP + OpenAI, hybrid collection, customer-owned India cloud first, and live-source/response acceptance still required.
+
 > **For the concrete work breakdown from here to a working MVP, see
 > [MVP_ROADMAP.md](MVP_ROADMAP.md).** This document holds the staging philosophy and
 > the standing risks; the roadmap holds the ordered task list, dependencies and
 > done-criteria. Stage 0 below is complete (on synthetic data) and Stage 1 is partly
 > complete.
 
-Sequenced so that **each stage produces a sales artifact**, not just code. The research is unambiguous that distribution and trust — not engineering — decide this market, so nothing here builds for more than ~2 weeks without something to show a buyer.
+Each stage should produce demonstrable technical and buyer evidence. Distribution,
+trust and implementation correctness all matter; keep buyer conversations alongside
+engineering instead of treating either as proof of product-market fit.
 
 ## Stage 0 — The ₹6 crore backtest (now, ~1 week)
 
 **Deliverable:** one sentence, backed by real data.
 > *"Prahari would have fired at ₹X spent, N hours before the invoice revealed it."*
 
-**Why first.** It costs a week, uses data we already own, and simultaneously: proves the detection-latency claim, becomes the cold open for all 30 discovery calls, and becomes slide 2 of any pitch. Building product before this is building blind.
+**Why first.** A synthetic replay can exercise detection rules while source access is unresolved. It does not prove real latency, ownership of employer records or prevented loss; an authorized real replay requires source-availability evidence.
 
 - [ ] Export historical GCP billing data covering the incident window (BigQuery billing export)
-- [ ] `scripts/backtest_incident.py` — load into DuckDB, reconstruct hourly spend per service account
+- [ ] Real replay adapter — separate project billing from supported audit/request identity evidence; billing alone cannot reconstruct per-service-account spend
 - [ ] Implement `SPEND_SPIKE` + `DORMANT_KEY_WAKE` + `NEW_GEO` against that series
 - [ ] Produce the timeline chart: actual spend curve, detection point, invoice-discovery point, rupees between them
 - [ ] Write it up as an anonymised case study → `gtm/case-study-incident.md`
@@ -46,7 +52,7 @@ This is the credibility gate. A finance tool that disagrees with the invoice is 
 - [ ] `gtm/gate-tracker.md` — running score per gate
 - [ ] Weekly review: are we still passing?
 
-**Gate 3 (DPDP/residency raised unprompted) is make-or-break for India-domestic-first.** If it fails, the geography changes, not the product.
+Residency is one buyer/deployment signal, not a blanket legal preference for an Indian vendor or the sole India-first criterion. Current gates require paid-pilot, technical and renewal evidence.
 
 ## Stage 3 — Working collector (~3 weeks, only if gates pass)
 
@@ -62,7 +68,7 @@ This is the credibility gate. A finance tool that disagrees with the invoice is 
 The line between a dashboard and a control plane.
 
 - [ ] Dry-run engine: what *would* be revoked, with no write access required
-- [ ] Budget hard-stops (org/team/key)
+- [ ] Planned routed budget admission/blocking with verified concurrency and bypass limits
 - [ ] Key revocation via provider admin APIs
 - [ ] Audit log with actor + reason
 - [ ] Get one design partner to authorise a real revoke in a sandbox
@@ -82,7 +88,7 @@ Next.js + shadcn/ui + Tremor UI · multi-tenant control plane · WorkOS SSO · I
 
 | Risk | Response |
 |---|---|
-| Torii/Flexera ship enforcement first | Move on the security buyer they don't sell to; our detection latency is a harder engineering problem than their dashboards |
+| Incumbent meets the same pilot need | Compare the actual workflow/deployment cost; narrow the wedge or consider integration/OEM instead of asserting an unserved buyer |
 | Design partner won't grant admin keys | Self-hosted collector + dry-run mode exist precisely for this. If it still fails, that's a Gate-3 signal |
-| GCP incident data unavailable / IP-encumbered | Reconstruct the scenario synthetically from published LLMjacking rates ($46K–100K/day). Weaker artifact, still usable |
-| Solo founder + AI-written code handling credentials | Never hold customer credentials. Self-hosted collector is a security decision before it is a sales one |
+| GCP incident data unavailable / IP-encumbered | Use explicitly synthetic fixtures; published worst-case threat estimates are scenario inputs, not measured typical loss |
+| Solo founder + AI-written code handling credentials | Customer-held deployment, least privilege, secret-safe operational configuration and regression/live checks; hosting does not eliminate runtime risk |

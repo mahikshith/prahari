@@ -183,7 +183,7 @@ class TestBaselineTracksActivityNotObservations:
 
         # 40 days of gap-filled silence.
         for gap in range(24 * 40):
-            det.process(obs(h + gap, "0"))
+            det.process(obs(h + gap, "0", tokens=0, requests=0))
 
         alerts = det.process(obs(h + 24 * 40, "900"))
         assert [a for a in alerts if a.rule is Rule.DORMANT_KEY_WAKE]
@@ -193,7 +193,7 @@ class TestBaselineTracksActivityNotObservations:
         for h in range(24):
             det.process(obs(h, "100"))
         for h in range(24, 48):
-            det.process(obs(h, "0"))
+            det.process(obs(h, "0", tokens=0, requests=0))
 
         bl = det.baseline_for(KEY)
         assert bl is not None

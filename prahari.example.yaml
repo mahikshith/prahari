@@ -11,18 +11,24 @@
 store:
   path: data/warehouse/prahari.duckdb
 
+# Required for cross-currency budgets and USD-denominated detection floors.
+# Supply your dated accounting/settlement rates; no reference rate is invented.
+# Example shape: {base: USD, quote: INR, rate: "YOUR_RATE", as_of: YYYY-MM-DD,
+#                 source: "customer accounting source"}
+fx_rates: []
+
 # ---------------------------------------------------------------------------
 # Collectors
 # ---------------------------------------------------------------------------
 # settling_lag: never collect closer to now than this. Providers backfill their
-# own data for a while, and treating a still-filling window as final produces a
-# total that changes tomorrow.
+# own data for a while. This local delay does not establish provider completeness
+# or a delivery SLA; billing windows remain provisional.
 
 collectors:
   - provider: anthropic
     account_id: org_REPLACE_ME
-    # Anthropic lands data in ~5 min and permits one poll per minute - the
-    # fastest surface we have, and the one that catches attacks.
+    # Polling is rate-limited. Measure source arrival latency in the pilot;
+    # collection frequency alone does not establish attack detection speed.
     poll_interval: 5m
     settling_lag: 10m
     initial_lookback: 7d
@@ -37,8 +43,8 @@ collectors:
 
   - provider: gcp_vertex
     account_id: REPLACE_ME-billing-account
-    # The BigQuery billing export lags 4-24h with no guarantee, so polling it
-    # faster than hourly only costs query spend.
+    # Billing export has no delivery/completeness SLA. These conservative
+    # polling/delay settings cannot provide real-time credential protection.
     poll_interval: 1h
     settling_lag: 6h
     initial_lookback: 30d
@@ -46,8 +52,9 @@ collectors:
       billing_project: my-billing-project
       billing_dataset: billing_export
       billing_table: gcp_billing_export_v1_0123AB_4567CD_89EF01
-    # requires GOOGLE_APPLICATION_CREDENTIALS pointing at a service-account key
-    # with roles/bigquery.dataViewer on the export dataset
+    # Use Application Default Credentials (prefer workload identity), with
+    # roles/bigquery.dataViewer on the dataset and bigquery.jobUser on the
+    # query project. GOOGLE_APPLICATION_CREDENTIALS is an optional key path.
 
 # ---------------------------------------------------------------------------
 # Detection

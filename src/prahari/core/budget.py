@@ -37,7 +37,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
-from prahari.core.fx import FxTable, format_inr
+from prahari.core.fx import FxError, FxTable, format_money
 from prahari.core.models import UsageRecord
 
 IST = timedelta(hours=5, minutes=30)
@@ -118,8 +118,9 @@ class Budget:
     owner: str | None = None
 
     def __post_init__(self) -> None:
-        if self.amount <= 0:
-            raise ValueError("budget amount must be positive")
+        if not self.amount.is_finite() or self.amount <= 0:
+            raise ValueError("budget amount must be finite and positive")
+        object.__setattr__(self, "currency", self.currency.upper())
         for dimension in self.scope:
             if dimension not in SCOPE_DIMENSIONS:
                 raise ValueError(
@@ -206,6 +207,7 @@ class BudgetState:
     crossed_thresholds: tuple[Decimal, ...]
     contributors: tuple[tuple[str, Decimal], ...]
     record_count: int
+    unpriced_records: int = 0
 
     @property
     def is_accelerating(self) -> bool:
@@ -218,17 +220,24 @@ class BudgetState:
     def explain(self) -> str:
         parts = [
             f"[{self.status.upper()}] {self.budget.name} ({self.budget.describe_scope})",
-            f"{format_inr(self.spent)} of {format_inr(self.budget.amount)}"
-            f" ({self.pct_used:.0%})",
-            f"burn {format_inr(self.burn_rate_per_day, scale=False)}/day",
-            f"forecast {format_inr(self.forecast_period_end)} at period end",
+            f"{format_money(self.spent, self.budget.currency)} of "
+            f"{format_money(self.budget.amount, self.budget.currency)} ({self.pct_used:.0%})",
+            f"burn {format_money(self.burn_rate_per_day, self.budget.currency, scale=False)}/day",
+            f"forecast {format_money(self.forecast_period_end, self.budget.currency)} "
+            "at period end",
         ]
         if self.projected_overage > 0:
-            parts.append(f"projected overage {format_inr(self.projected_overage)}")
+            parts.append(
+                f"projected overage {format_money(self.projected_overage, self.budget.currency)}"
+            )
         if self.exhausted_on:
             parts.append(f"exhausted {self.exhausted_on.isoformat()}")
         if self.is_accelerating:
             parts.append("ACCELERATING")
+        if self.unpriced_records:
+            parts.append(
+                f"INCOMPLETE: {self.unpriced_records} records lack price or FX; known subtotal only"
+            )
         return " | ".join(parts)
 
 
@@ -254,7 +263,7 @@ class PreparedWindow:
     end: datetime
     now: datetime
     recent_cutoff: datetime
-    rows: tuple[tuple[UsageRecord, Decimal], ...]
+    rows: tuple[tuple[UsageRecord, Decimal | None], ...]
     dim_values: dict[str, tuple[str | None, ...]]
     """dimension -> value per row, positionally aligned with `rows`."""
     index: dict[str, dict[str, frozenset[int]]]
@@ -387,15 +396,18 @@ def evaluate(
     contributions: dict[str, Decimal] = {}
     recent_spend = Decimal(0)
     matched = 0
+    unpriced = 0
 
     rows = window.rows
     contributor_values = window.dim_values[contributor_dimension]
 
     for position in window.candidates(budget.scope):
         record, amount = rows[position]
-
-        spent += amount
         matched += 1
+        if amount is None:
+            unpriced += 1
+            continue
+        spent += amount
 
         key = contributor_values[position] or "unattributed"
         contributions[key] = contributions.get(key, Decimal(0)) + amount
@@ -452,6 +464,7 @@ def evaluate(
         crossed_thresholds=crossed,
         contributors=tuple(sorted(contributions.items(), key=lambda kv: -kv[1])[:10]),
         record_count=matched,
+        unpriced_records=unpriced,
     )
 
 
@@ -504,12 +517,17 @@ def _status(pct: Decimal, thresholds: Sequence[Decimal]) -> BudgetStatus:
     return BudgetStatus.OK
 
 
-def _to_budget_currency(record: UsageRecord, currency: str, fx: FxTable | None) -> Decimal:
+def _to_budget_currency(record: UsageRecord, currency: str, fx: FxTable | None) -> Decimal | None:
+    if record.billed_cost is None:
+        return None
     if record.currency.upper() == currency.upper():
         return record.billed_cost
     table = fx or FxTable()
     on = record.fx_rate_date or record.period_start.date()
-    return table.convert(record.billed_cost, record.currency, currency, on)
+    try:
+        return table.convert(record.billed_cost, record.currency, currency, on)
+    except FxError:
+        return None
 
 
 # --- enforcement (dry-run first, always) --------------------------------------
@@ -536,7 +554,8 @@ class EnforcementDecision:
         targets = ", ".join(self.would_affect[:5]) or "no identified targets"
         return (
             f"{prefix} {self.action.upper()} - {self.budget_name} "
-            f"({format_inr(self.spent)} of {format_inr(self.limit)}). "
+            f"({format_money(self.spent, self.currency)} of "
+            f"{format_money(self.limit, self.currency)}). "
             f"{self.reason} Targets: {targets}."
         )
 
@@ -555,6 +574,8 @@ def decide_enforcement(
     three keys" is answerable; "trust us" is not.
     """
     if state.budget.enforcement is EnforcementAction.ALERT_ONLY:
+        return None
+    if state.unpriced_records:
         return None
     if state.status is not BudgetStatus.EXCEEDED:
         return None

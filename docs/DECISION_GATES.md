@@ -1,41 +1,26 @@
-# Decision Gates
+# Pilot decision gates
 
-**These outrank the build plan.** If the gates fail, we stop or change direction regardless of how much code exists. Written down now, before we're emotionally invested, precisely so that a later self can't quietly move the goalposts.
+**Updated:** 2026-10-12. These gates implement [DECISIONS.md](DECISIONS.md); current actual outcomes live in [PROGRESS.md](../PROGRESS.md). Earlier survey percentages, ₹20L authority thresholds and DPDP-only geography rules were hypotheses, not validated go/no-go criteria.
 
-Evidence comes from **~30 structured conversations**: 10 India GCC FinOps/CloudOps/platform leads, 6 BFSI (IT + risk), 5 CISOs, 8 Indian AI-native scale-ups.
+Evaluate startup/midmarket and regulated enterprise interviews separately while keeping one shared core. Record concrete prior events, existing alternatives, buying authority, permissions and procurement constraints; hypothetical fear or willingness to pay is not a purchased pilot.
 
-No product needed to run these. The ₹6 crore backtest is the entire opening.
-
-## The five gates
-
-| # | Gate | Pass bar | Why it matters |
-|---|---|---|---|
-| **1** | **Blindness is real** — they cannot state per-team AI cost without a manual spreadsheet exercise | **>70%** | If they can already answer it, the entry product has no wedge |
-| **2** | **The abuse vector is felt** — they've had a credential-abuse or runaway-agent cost event, or rank it a top-3 fear | **>30%** | This is the differentiator. Below this, we're selling a commodity dashboard against six funded incumbents |
-| **3** | **Residency is load-bearing** — DPDP / India data residency raised **unprompted** as a reason to prefer an Indian vendor | **>40%** | **Make-or-break for India-domestic-first.** The only structural advantage over Torii and Flexera |
-| **4** | **Budget exists and is local** — confirmed **₹20L+** annual authority for this line item, approvable in India | **≥5 of 30** | Tests whether GCC budget independence is real or theatre |
-| **5** | **Enforcement beats visibility** — would pay materially more for auto-revoke + hard-stops than for dashboards alone | **>50%** | Decides whether this is a control plane (a company) or a dashboard (a feature) |
-
-## How to read the result
-
-| Outcome | Decision |
+| Gate | Evidence required |
 |---|---|
-| **1, 2, 3, 5 pass** | **GO.** Agentless control plane, India-domestic-first, GCC-led. Raise on the compliance-inevitability narrative |
-| **1, 2, 5 pass · 3 fails** | **GO, but not India-domestic-first.** Without the residency advantage we'd be competing on price against better-funded incumbents in our lowest-ACV market. Switch to India-built / global-sold, USD pricing |
-| **1, 3 pass · 2, 5 fail** | **It's a feature, not a company.** Best outcome: build the normalisation + INR/GST/transfer-pricing engine and OEM it to a FinOps or SaaS-management platform, or to an Indian IT services FinOps practice |
-| **4 fails, others pass** | **Right product, wrong buyer.** Re-target BFSI and Indian IT services, where budget authority is unambiguously local |
-| **1 or 2 fails** | **Walk away.** The ₹6 crore incident was an outlier for one company, not a market signal. Stop cleanly and cheaply |
+| Source | Authorized GCP + OpenAI fixtures establish field availability, source delay, completeness and permissions. No employer records without separate permission. |
+| Differentiation | Compare direct-key abuse, legitimate bursts, retry loops and regional fallback against current buyer tooling or a direct competitor; record misses and false alerts. |
+| Commercial | Target three paid design partners with named owners and written success criteria. The target is not achieved until commitments exist. |
+| Accounting | Target ≤2% settled-period aggregate variance per provider, with taxes, FX, credits and unallocated differences explained. Matching totals do not prove employee/per-key attribution. |
+| Containment | Validate scoped audited response and actual effect in a sandbox. Routed budget blocking must exercise concurrency, interrupted requests, in-flight exposure and unavailable accounting state; disclose bypass limits. |
+| Retention | Target two renewals/expansions on demonstrated value before adding providers, SaaS-seat discovery or broad FinOps. |
 
-## Rules for running this honestly
+## Reading the evidence
 
-1. **Don't lead the witness on Gate 3.** The word "DPDP" must come from them. If we mention residency first, the answer is worthless — and Gate 3 is the one carrying the whole geography decision.
-2. **Gate 2 counts real events, not enthusiasm.** "That sounds scary" is not a yes. "We had an incident / near-miss / it's on our risk register" is.
-3. **Gate 5 needs a number, not a nod.** Ask what they'd pay for visibility alone, then for enforcement. A gap under ~30% counts as a fail.
-4. **Record every call in `gtm/gate-tracker.md` the same day.** Retrospective scoring drifts toward whatever we want to be true.
-5. **Review weekly.** If a gate is clearly failing by call 15, stop and re-decide — don't burn the remaining 15 calls confirming it.
+Proceed with expansion when the technical, commercial and renewal evidence supports it. If an incumbent meets the same workflow at lower installation cost, narrow the wedge or consider integration/OEM work. A weak residency signal changes deployment priorities; it does not automatically invalidate India-first or establish a lack of market.
 
-## Technical feasibility check (runs alongside)
+India hosting, regulated-buyer requirements and DPDP applicability are separate questions. Do not promise certifications or a blanket localization mandate. The existing incident replay is synthetic; its spend-at-alert is not measured prevented loss.
 
-Using existing accounts, read-only, no new infrastructure: pull one month from the Anthropic Usage & Cost API, OpenAI org costs, and the GCP billing export, and reconcile computed totals against the actual invoices.
+## Discovery practice
 
-**Target: ≤2% variance.** A finance tool that disagrees with the invoice is dead on arrival — and this is cheap to test now, before commitment. It also yields the second-best artifact after the ₹6 crore story: proof the numbers tie out.
+Keep questions non-leading, record each call promptly in gtm/gate-tracker.md, and review findings weekly. Ask for concrete incidents/invoices and current alternatives. Identify the actual budget owner and purchase process rather than treating a nod or theoretical enforcement premium as demand.
+
+Live read-only validation can use a founder/customer sandbox; employer permission is needed only for employer information. No live gateway, cloud logging, network controls or credential revocation is enabled by passing an interview gate.

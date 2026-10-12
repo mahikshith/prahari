@@ -37,11 +37,13 @@ from prahari.connectors.base import (
 from prahari.core.models import (
     ChargeCategory,
     Completeness,
+    CostBasis,
     CostComponents,
     Provider,
     TokenCounts,
     UsageRecord,
 )
+from prahari.core.money import parse_money
 from prahari.pricing.registry import lookup
 
 BASE_URL = "https://api.openai.com"
@@ -119,9 +121,8 @@ class OpenAIConnector(Connector):
 
             for result in bucket.get("results", []):
                 record = self._to_record(result, bucket_start, bucket_end, settled, now)
-                if record is not None:
-                    records.append(record)
-                else:
+                records.append(record)
+                if record.cost_basis is CostBasis.UNPRICED:
                     warnings.append(
                         f"unpriced model {result.get('model')!r} at {bucket_start:%Y-%m-%d %H:%M}"
                     )
@@ -141,7 +142,7 @@ class OpenAIConnector(Connector):
         bucket_end: datetime,
         settled: bool,
         now: datetime,
-    ) -> UsageRecord | None:
+    ) -> UsageRecord:
         model = result.get("model")
 
         cached = int(result.get("input_cached_tokens", 0) or 0)
@@ -160,10 +161,8 @@ class OpenAIConnector(Connector):
         )
 
         price = lookup(model, provider="openai") if model else None
-        if price is None:
-            return None
 
-        costs = CostComponents(
+        costs = CostComponents() if price is None else CostComponents(
             input_cost=price.input_cost_per_token * tokens.input_tokens,
             output_cost=price.output_cost_per_token * tokens.output_tokens,
             cache_read_cost=(price.cache_read_cost_per_token or price.input_cost_per_token)
@@ -180,7 +179,8 @@ class OpenAIConnector(Connector):
             charge_category=ChargeCategory.USAGE,
             tokens=tokens,
             costs=costs,
-            billed_cost=costs.total,
+            billed_cost=costs.total if price is not None else None,
+            cost_basis=CostBasis.ESTIMATED if price is not None else CostBasis.UNPRICED,
             currency="USD",
             period_start=bucket_start,
             period_end=bucket_end,
@@ -188,7 +188,7 @@ class OpenAIConnector(Connector):
             source=f"openai:{USAGE_PATH}",
             completeness=Completeness.ESTIMATED if settled else Completeness.PARTIAL,
             extensions={
-                "priced_from": "registry",
+                "priced_from": "registry" if price is not None else None,
                 "batch": result.get("batch"),
                 "settled": settled,
             },
@@ -211,7 +211,9 @@ class OpenAIConnector(Connector):
             day = _from_epoch(bucket["start_time"]).date().isoformat()
             for result in bucket.get("results", []):
                 amount = result.get("amount") or {}
-                value = Decimal(str(amount.get("value", "0")))
+                if str(amount.get("currency") or "").upper() != "USD":
+                    raise ValueError("OpenAI cost report must use USD")
+                value = parse_money(amount.get("value"), field="amount.value")
                 totals[day] = totals.get(day, Decimal(0)) + value
         return totals
 

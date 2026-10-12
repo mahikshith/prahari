@@ -23,7 +23,7 @@ from prahari.connectors.gcp import (
     _model_from_sku,
     classify,
 )
-from prahari.core.models import Provider
+from prahari.core.models import ChargeCategory, Completeness, CostBasis, Provider
 
 START = datetime(2026, 6, 1, 0, 0, tzinfo=UTC)
 END = START + timedelta(hours=2)
@@ -39,6 +39,8 @@ def row(**overrides) -> dict:
         "project_name": "Robotics Production",
         "region": "asia-south1",
         "currency": "INR",
+        "cost_type": "regular",
+        "invoice_month": "202606",
         "gross_cost": 1000.0,
         "credit_amount": 0.0,
         "usage_amount": 5_000_000,
@@ -55,7 +57,8 @@ class FakeQueryJob:
     def __init__(self, rows: list[dict]) -> None:
         self._rows = rows
 
-    def __iter__(self):
+    def result(self, *, timeout=None, retry=None, job_retry=None):
+        self.result_options = {"timeout": timeout, "retry": retry, "job_retry": job_retry}
         return iter(self._rows)
 
 
@@ -64,11 +67,14 @@ class FakeBQClient:
         self._rows = rows
         self.last_params: dict = {}
 
-    def query(self, sql, job_config=None):
+    def query(self, sql, job_config=None, **kwargs):
         if job_config is not None and getattr(job_config, "query_parameters", None):
             self.last_params = {p.name: p.value for p in job_config.query_parameters}
         self.last_sql = sql
-        return FakeQueryJob(self._rows)
+        self.last_options = kwargs
+        self.last_job_config = job_config
+        self.last_job = FakeQueryJob(self._rows)
+        return self.last_job
 
 
 def connector(rows: list[dict], **kw) -> GCPBillingConnector:
@@ -95,7 +101,30 @@ class TestCostArithmetic:
 
         rec = result.records[0]
         assert rec.billed_cost == Decimal("750.0")
-        assert rec.list_cost == Decimal("1000.0")
+        assert rec.list_cost is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cost_type, category", [
+        ("regular", ChargeCategory.USAGE),
+        ("tax", ChargeCategory.TAX),
+        ("adjustment", ChargeCategory.ADJUSTMENT),
+        ("rounding_error", ChargeCategory.ADJUSTMENT),
+    ])
+    async def test_preserves_charge_type_and_invoice_month(self, cost_type, category):
+        result = await connector([row(cost_type=cost_type, invoice_month="202607")]).fetch(
+            START, END
+        )
+        rec = result.records[0]
+        assert rec.charge_category is category
+        assert rec.extensions["cost_type"] == cost_type
+        assert rec.extensions["invoice_month"] == "202607"
+        if category is not ChargeCategory.USAGE:
+            assert rec.tokens.total_tokens == 0
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_charge_type(self):
+        with pytest.raises(ValueError, match="unsupported GCP cost_type"):
+            await connector([row(cost_type="unexpected")]).fetch(START, END)
 
     @pytest.mark.asyncio
     async def test_credit_is_visible_as_its_own_component(self):
@@ -167,6 +196,24 @@ class TestServiceCoverage:
         ).fetch(START, END)
         assert result.records[0].extensions["run_vcpu_hours"] == pytest.approx(2.0)
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("unit, amount", [
+        ("byte-seconds", 1024**3 * 3600),
+        ("gibibyte second", 3600),
+    ])
+    async def test_cloud_run_converts_memory_usage_to_gib_hours(self, unit, amount):
+        result = await connector([row(
+            service="Cloud Run", sku="Memory Allocation Time", usage_unit=unit, usage_amount=amount,
+        )]).fetch(START, END)
+        assert result.records[0].extensions["run_gib_hours"] == pytest.approx(1.0)
+
+    @pytest.mark.asyncio
+    async def test_bigquery_storage_is_not_reported_as_query_bytes(self):
+        result = await connector([row(
+            service="BigQuery", sku="Storage", usage_unit="byte-seconds", usage_amount=1024**4,
+        )]).fetch(START, END)
+        assert "bq_tib_scanned" not in result.records[0].extensions
+
 
 class TestTokenMapping:
     @pytest.mark.asyncio
@@ -192,6 +239,18 @@ class TestTokenMapping:
         assert result.records[0].tokens.total_tokens == 0
         assert result.records[0].model is None
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("service, sku, unit", [
+        ("Cloud Translation API", "Translation characters", "characters"),
+        ("Vertex AI", "Gemini Context Cache Storage", "token-hours"),
+        ("Vertex AI", "Gemini Context Cache Storage", "tokens"),
+    ])
+    async def test_characters_and_cache_storage_are_not_inference_tokens(self, service, sku, unit):
+        result = await connector([row(service=service, sku=sku, usage_unit=unit)]).fetch(START, END)
+        assert result.records[0].tokens.total_tokens == 0
+        assert result.records[0].extensions["usage_amount"] == 5_000_000
+        assert result.records[0].extensions["usage_unit"] == unit
+
     def test_model_extraction_returns_none_on_unrecognised_sku(self):
         """SKU descriptions are human prose and change without notice. A wrong model
         attribution silently misprices and would make MODEL_ESCALATION fire on a
@@ -210,11 +269,14 @@ class TestCompleteness:
 
         assert result.is_complete is False
         assert result.warnings and "not settled" in result.warnings[0]
+        assert result.records[0].completeness is Completeness.PARTIAL
+        assert result.records[0].cost_basis is CostBasis.PROVIDER_REPORTED
 
     @pytest.mark.asyncio
-    async def test_window_is_complete_when_export_has_caught_up(self):
+    async def test_later_export_arrival_does_not_prove_window_complete(self):
         result = await connector([row(last_export_time=LATE_EXPORT)]).fetch(START, END)
-        assert result.is_complete is True
+        assert result.is_complete is False
+        assert result.records[0].completeness is Completeness.PARTIAL
 
 
 class TestQueryConstruction:
@@ -231,13 +293,29 @@ class TestQueryConstruction:
         memorable way to introduce a cost-control product."""
         conn = connector([row()])
         await conn.fetch(START, END)
-        assert "_PARTITIONTIME" in conn._client.last_sql
+        assert "_PARTITIONTIME >= TIMESTAMP_SUB(@start" in conn._client.last_sql
+
+    @pytest.mark.asyncio
+    async def test_partition_filter_does_not_exclude_late_exports(self):
+        conn = connector([row(last_export_time=END + timedelta(days=30))])
+        result = await conn.fetch(START, END)
+        assert "_PARTITIONTIME <" not in conn._client.last_sql
+        assert len(result.records) == 1
+        assert result.is_complete is False
 
     @pytest.mark.asyncio
     async def test_buckets_hourly_not_daily(self):
         conn = connector([row()])
         await conn.fetch(START, END)
         assert "TIMESTAMP_TRUNC(usage_start_time, HOUR)" in conn._client.last_sql
+
+    @pytest.mark.asyncio
+    async def test_keeps_invoice_and_charge_type_in_query_grain(self):
+        conn = connector([row()])
+        await conn.fetch(START, END)
+        sql = conn._client.last_sql
+        assert "invoice.month" in sql
+        assert "cost_type, invoice_month" in sql.split("GROUP BY", 1)[1]
 
     @pytest.mark.asyncio
     async def test_attributes_to_usage_time_not_export_time(self):
@@ -284,3 +362,31 @@ class TestConfiguration:
     async def test_rejects_naive_datetimes(self):
         with pytest.raises(ValueError, match="timezone-aware"):
             await connector([]).fetch(datetime(2026, 6, 1), datetime(2026, 6, 2))
+
+
+class TestQueryDeadlines:
+    @pytest.mark.asyncio
+    async def test_submit_and_result_waits_are_bounded_without_automatic_retries(self):
+        conn = connector([row()])
+        await conn.fetch(START, END)
+        assert conn._client.last_options == {"timeout": 15, "retry": None, "job_retry": None}
+        assert conn._client.last_job.result_options == {
+            "timeout": 40, "retry": None, "job_retry": None,
+        }
+        assert conn._client.last_job_config.job_timeout_ms == "40000"
+
+    @pytest.mark.asyncio
+    async def test_timed_out_query_is_not_reported_as_empty_or_complete(self, monkeypatch):
+        def timeout_result(self, *, timeout, retry, job_retry):
+            assert timeout == 40
+            raise TimeoutError("query wait timed out")
+
+        monkeypatch.setattr(FakeQueryJob, "result", timeout_result)
+        with pytest.raises(TimeoutError, match="query wait timed out"):
+            await connector([row()]).fetch(START, END)
+
+    @pytest.mark.asyncio
+    async def test_credential_dry_run_submit_is_bounded(self):
+        conn = connector([])
+        assert await conn.verify_credentials()
+        assert conn._client.last_options == {"timeout": 15, "retry": None, "job_retry": None}

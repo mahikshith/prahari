@@ -89,6 +89,20 @@ Separate where Prahari stores metadata from where the model processes requests. 
 
 Customer-owned India deployment reduces central exposure but requires installation/upgrade support. India SaaS later requires tenant isolation, authentication/authorization, credential management, deletion/export, backups, incident handling and a reviewed data-processing arrangement. Do not add these as empty scaffolding before a paid pilot needs them.
 
+## Deferred task: hourly user/account cost feasibility
+
+**Status:** deferred at the founder's request on 2026-10-12. Resume this assessment before implementing [user cost visibility](USER_COST_VISIBILITY.md).
+
+- [ ] Select the first usage path: company application, individual developer credentials or employee SaaS tools.
+- [ ] Identify authorized GCP + OpenAI sandbox accounts and read-only integration permissions.
+- [ ] Verify source fields, identity meaning, supported time buckets, pagination and cost-report granularity.
+- [ ] Determine how shared credentials can carry trusted employee identity; keep unsupported attribution explicit.
+- [ ] Measure source freshness and distinguish hourly estimates from reconciled billing, including timezone/FX limits.
+- [ ] Validate two users across two providers, with shared-key and unattributed examples.
+- [ ] Record a feasible/conditional/unsupported verdict and integration requirements before feature implementation.
+
+No sandbox access, feasibility harness or new feature implementation was completed before this pause. Source research and the existing foundation remain available; live acceptance is pending.
+
 ## Next concrete milestone
 
 Use a founder-owned or customer-authorized sandbox to answer four questions before promising the first pilot: can supported Gemini calls expose a usable principal; can their usage be joined to that principal; how late does each source arrive; and how does that incident workflow compare with the existing customer tooling? Capture sanitized fixtures and actual timings. Do not request production secrets in chat or use employer incident data without separate authorization.

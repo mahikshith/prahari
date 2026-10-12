@@ -4,6 +4,7 @@
 **Stage:** pilot foundation repair; live-source/customer acceptance pending.
 **Repository:** GitHub remote exists at https://github.com/mahikshith/prahari.
 **Working branch:** codex/prahari-pilot-foundation.
+**Hourly user/account cost feature:** feasibility/integration work deferred at the founder's request on 2026-10-12; resume from the checklist in [PILOT_PLAN.md](docs/PILOT_PLAN.md) before implementation.
 **Final integrated verification:** 334 tests passed in 12.44s; Ruff, dependency-lock and whitespace checks passed on 2026-10-12. Synthetic backtest smoke passed. Docker is unavailable; no container build/runtime or live-provider checks were performed.
 
 Read [CLAUDE.md](CLAUDE.md) → [docs/DECISIONS.md](docs/DECISIONS.md) for current direction. Historical 47/205-test counts and local-only/no-remote notes are not current verification evidence.

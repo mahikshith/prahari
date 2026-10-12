@@ -263,6 +263,14 @@ Status means **accepted** for a product choice, **implemented locally** for a co
 - **Expected outcome and acceptance:** fixtures exercise shared keys, cross-account identity collisions, absent user data, unknown prices, source freshness and timezone boundaries; known user totals plus unattributed cost explain the known subtotal.
 - **Actual outcome:** the source/identity design is documented. No identity resolver, new employee-tool connector or live claim has been implemented or validated by this entry.
 
+## D033 Defer user-cost feasibility and preserve its next steps
+
+**Date:** 2026-10-12. **Status:** deferred at the founder's request.
+- **Decision and evidence:** stop the newly started feasibility/integration work and retain it as a checklist in PILOT_PLAN.md, as requested by the founder.
+- **Rationale and importance:** preserve the intended order—prove source and identity feasibility before feature implementation—without continuing work after the requested stop.
+- **Expected outcome and acceptance:** a later explicit resume starts with the deferred checklist and records a supported/conditional/unsupported assessment before implementation.
+- **Actual outcome:** all three specialist tasks were interrupted; the working tree contained no partial changes from them. No live source calls, feasibility harness or new user-cost feature were implemented. The checklist and this decision are the documentation-only outcome.
+
 ## Updating actual outcomes
 
 Append dated evidence under the relevant ID after final tests, live-source checks, invoice reconciliation or customer trials. Include the tested revision/window, command or artifact, result and material limits. Keep historical outcomes; add a new decision when the choice changes. Do not replace a pending live outcome with a passing mocked test.
